@@ -147,21 +147,6 @@ Pluto.run()
    - Watch the simulation progress in real-time
    - Explore interactive visualizations
 
-### Basic Command Line Usage
-
-Alternatively, you can run the model from a Julia script:
-
-```julia
-include("GREB_julia.jl")
-
-# Load input data
-input_dir = "Data/input"
-load_greb_input_data!(input_dir; dataset=:ncep)
-
-# Configure and run simulation
-# [See notebook for detailed configuration]
-```
-
 ## 📂 Input Data
 
 ### Required Input Files
@@ -237,18 +222,16 @@ Output variables include:
 ## 📁 Project Structure
 
 ```
-ClimaModel/
-├── GREB_julia.jl              # Main Pluto notebook
-├── GREB_julia.jl.bak          # Backup copy
-├── Hydrologisch_model.jl      # Separate hydrological model
-├── Project.toml               # Julia project dependencies
-├── Manifest.toml              # Locked dependency versions
+GREB_julia/
+├── GREB-julia.jl              # Main interactive Pluto notebook
+├── Hydrologisch_model.jl      # Separate hydrological model notebook
+├── Project.toml               # Julia dependencies
+├── Manifest.toml              # Locked versions
 ├── README.md                  # This file
 ├── LICENSE                    # License information
-├── Data/                      # Input data directory
-│   └── input/                 # Climate input files (.bin)
-├── greb_output_*.csv          # Model output files
-└── greb_output.nc             # NetCDF output (optional)
+├── DATA_README.md             # Input data guide
+├── LICENSE                    # MIT License
+└── Data/input/                # Climate input files (binary format)
 ```
 
 ## 🔬 Key Model Components
@@ -273,6 +256,31 @@ ClimaModel/
 - Moisture transport
 - Simplified circulation patterns
 
+## ⚠️ Known Issues
+
+The following issues are currently being worked on:
+
+### Visualization Problems
+- **Interactive plots**: Some visualization components in the Pluto notebook may not render correctly on first load. **Workaround**: Re-run the affected cells or restart the notebook.
+- **Plot updates**: Real-time plot updates during simulation may be inconsistent.
+
+### Coordinate Selection
+- **Grid point selection**: The interactive coordinate/grid point selection tool can be buggy and may not respond correctly to user input.
+- **Latitude/longitude indexing**: Manual coordinate selection may occasionally select incorrect grid points.
+
+### Reporting Issues
+
+If you encounter these or other problems:
+1. Check that all input data files are correctly formatted and located
+2. Verify Julia and package versions match requirements
+3. Try restarting the Pluto notebook
+4. Open an issue on GitHub with:
+   - Julia version (`versioninfo()`)
+   - Error messages or unexpected behavior description
+   - Steps to reproduce
+
+Contributions to fix these issues are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## 📚 References
 
 ### Primary Publications
@@ -285,25 +293,6 @@ ClimaModel/
 
 ### Original GREB Model
 - [Monash University GREB Homepage](http://www.monash.edu/science/research/climate)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Guidelines
-
-- Follow Julia style conventions
-- Add documentation for new functions
-- Include tests for new features
-- Update README as needed
 
 ## 📄 License
 
