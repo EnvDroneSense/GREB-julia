@@ -120,7 +120,7 @@ ClimaModel/
 │           └── [various solar forcing files]
 ```
 
-**Note**: Input data files are available from the original GREB model repository or can be obtained by contacting the model developers. See the [Input Data](#input-data) section for more details.
+**Note**: Input data files are available from the original GREB model repository [greb-official](https://github.com/christianstassen/greb-official/tree/official/input)
 
 ## 🚀 Quick Start
 
@@ -260,13 +260,8 @@ GREB_julia/
 
 The following issues are currently being worked on:
 
-### Visualization Problems
-- **Interactive plots**: Some visualization components in the Pluto notebook may not render correctly on first load. **Workaround**: Re-run the affected cells or restart the notebook.
-- **Plot updates**: Real-time plot updates during simulation may be inconsistent.
-
-### Coordinate Selection
-- **Grid point selection**: The interactive coordinate/grid point selection tool can be buggy and may not respond correctly to user input.
-- **Latitude/longitude indexing**: Manual coordinate selection may occasionally select incorrect grid points.
+### The model.
+At the moment it doesn't work yet, I don't know why but I'm looking into it.
 
 ### Reporting Issues
 
@@ -298,7 +293,7 @@ Contributions to fix these issues are welcome! See [CONTRIBUTING.md](CONTRIBUTIN
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **Original GREB Model**: Dietmar Dommenget, Janine Flöter, Tobias Bayr, Christian Stassen (Monash University)
 - **Julia Translation and Optimization**: Thomas Struys (UGent)
