@@ -19,11 +19,9 @@ end
 # ╔═╡ 1165eeb4-10d8-4fb5-859d-7fe410189608
 begin
 	using Statistics
-	using Printf
 	using Plots
 	using PlutoUI
 	using NCDatasets
-	using Dates  # For timestamps
 	using StaticArrays  # For optimization: static longitude indices
 	using LoopVectorization  # For SIMD vectorization with @turbo
 end
@@ -93,13 +91,23 @@ Read a GrADS binary file (sequential 32-bit floats, Fortran order).
 function read_grads_binary(filepath::String, nx::Int, ny::Int, nt::Int=1)
     # Calculate expected size
     nvals = nx * ny * nt
+	expected_bytes = nvals * sizeof(Float32)
+
+	if !isfile(filepath)
+		error("Required input file not found: $filepath")
+	end
+
+	actual_bytes = filesize(filepath)
+	if actual_bytes != expected_bytes
+		error("Binary size mismatch for $filepath: expected $expected_bytes bytes, got $actual_bytes bytes")
+	end
     
     # Read binary file as Float32 (GrADS default)
     data = open(filepath, "r") do io
         read!(io, Array{Float32}(undef, nvals))
     end
     
-    # Reshape: GrADS stores as (lon, lat, time) in Fortran column-major order
+    # Reshape: GrADS stores as (lon, lat, time)
     if nt == 1 && nx > 1
         # Static 2D field (topography, glacier)
         return Array{Float64}(reshape(data, nx, ny))
@@ -110,6 +118,225 @@ function read_grads_binary(filepath::String, nx::Int, ny::Int, nt::Int=1)
         # Full 3D field (lon, lat, time)
         return Array{Float64}(reshape(data, nx, ny, nt))
     end
+end
+
+# ╔═╡ f578f25e-047e-4a7e-8483-d544c7b4bec3
+"""
+    load_flux_corrections!(input_dir::String)
+
+Load flux correction fields conditionally (called only when needed by qflux_correction!).
+Populates: TF_correct, qF_correct, ToF_correct with fallback to zeros if missing.
+"""
+function load_flux_corrections!(input_dir::String)
+    println("  • Loading flux corrections...")
+    
+    print("    - Surface temperature... ")
+    tf_path = joinpath(input_dir, "Tsurf_flux_correction.bin")
+    if isfile(tf_path)
+        global TF_correct .= read_grads_binary(tf_path, 96, 48, 730)
+        println("✓")
+    else
+        global TF_correct .= 0.0
+        @warn "Tsurf flux correction not found, using zeros" file=tf_path
+        println("⚠")
+    end
+    
+    print("    - Water vapor... ")
+    qf_path = joinpath(input_dir, "vapour_flux_correction.bin")
+    if isfile(qf_path)
+        global qF_correct .= read_grads_binary(qf_path, 96, 48, 730)
+        println("✓")
+    else
+        global qF_correct .= 0.0
+        @warn "Vapour flux correction not found, using zeros" file=qf_path
+        println("⚠")
+    end
+    
+    print("    - Deep ocean... ")
+    tof_path = joinpath(input_dir, "Tocean_flux_correction.bin")
+    if isfile(tof_path)
+        global ToF_correct .= read_grads_binary(tof_path, 96, 48, 730)
+        println("✓")
+    else
+        global ToF_correct .= 0.0
+        @warn "Tocean flux correction not found, using zeros" file=tof_path
+        println("⚠")
+    end
+    
+    return nothing
+end
+
+# ╔═╡ 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3
+"""
+    load_greb_input_data!(input_dir::String; dataset::Symbol=:ncep)
+
+Load all required GREB input files from the specified directory and populate
+the global climate field arrays in-place.
+
+# Arguments
+- `input_dir`: Path to the input/ directory containing .bin files
+- `dataset`: Climate dataset to use (`:ncep` (default), `:era`, or `:era_ncep`)
+
+# Modifies global arrays
+Populates: `z_topo`, `glacier`, `Tclim`, `uclim`, `vclim`, `qclim`, `mldclim`,
+`Toclim`, `cldclim`, `swetclim`, `sw_solar`, and MSCM fields (`omegaclim`,
+`omegastdclim`, `wsclim`). Flux-correction fields (`TF_correct`, `qF_correct`,
+`ToF_correct`) are loaded separately by `load_flux_corrections!()` when needed.
+"""
+function load_greb_input_data!(input_dir::String; dataset::Symbol=:ncep)
+    println("═══════════════════════════════════════════════════════════")
+    println("  Loading GREB Climate Data")
+    println("  Directory: $input_dir")
+    println("  Dataset: $dataset")
+    println("═══════════════════════════════════════════════════════════")
+
+	if !isdir(input_dir)
+		error("Input directory not found: $input_dir")
+	end
+    
+    # ─── Static 2D fields ───────────────────────────────────────────
+    println("\n[1/4] Loading static 2D fields...")
+    
+    print("  • Topography... ")
+    global z_topo .= read_grads_binary(joinpath(input_dir, "global.topography.bin"), 96, 48, 1)
+    println("✓")
+    
+    print("  • Glacier mask... ")
+    global glacier .= read_grads_binary(joinpath(input_dir, "greb.glaciers.bin"), 96, 48, 1)
+    println("✓")
+    
+    # ─── 3D climatology fields (96 × 48 × 730) ──────────────────────
+    println("\n[2/4] Loading 3D climatology fields (96×48×730)...")
+    
+    # Select dataset-specific files
+    if dataset == :ncep
+        tsurf_file = "ncep.tsurf.1948-2007.clim.bin"
+        uwind_file = "ncep.zonal_wind.850hpa.clim.bin"
+        vwind_file = "ncep.meridional_wind.850hpa.clim.bin"
+        humid_file = "ncep.atmospheric_humidity.clim.bin"
+        swet_file = "ncep.soil_moisture.clim.bin"
+    elseif dataset == :era
+        tsurf_file = "erainterim.tsurf.1979-2015.clim.bin"
+        uwind_file = "erainterim.zonal_wind.850hpa.clim.bin"
+        vwind_file = "erainterim.meridional_wind.850hpa.clim.bin"
+        humid_file = "erainterim.atmospheric_humidity.clim.bin"
+        swet_file = "ncep.soil_moisture.clim.bin"  # ERA doesn't have soil moisture
+    else  # :era_ncep mixed
+        tsurf_file = "erainterim.tsurf.1979-2015.clim.bin"
+        uwind_file = "ncep.zonal_wind.850hpa.clim.bin"
+        vwind_file = "ncep.meridional_wind.850hpa.clim.bin"
+        humid_file = "ncep.atmospheric_humidity.clim.bin"
+        swet_file = "ncep.soil_moisture.clim.bin"
+    end
+    
+	# Strictly required for a baseline run.
+	required_files = [
+		"global.topography.bin",
+		"greb.glaciers.bin",
+		tsurf_file,
+		uwind_file,
+		vwind_file,
+		humid_file,
+		"isccp.cloud_cover.clim.bin",
+		swet_file,
+		"woce.ocean_mixed_layer_depth.clim.bin",
+		"Tocean.clim.bin",
+		"solar_radiation.clim.bin",
+	]
+
+	for req in required_files
+		req_path = joinpath(input_dir, req)
+		if !isfile(req_path)
+			error("Required GREB input file missing: $req_path")
+		end
+	end
+
+	print("  • Surface temperature ($tsurf_file)... ")
+    global Tclim .= read_grads_binary(joinpath(input_dir, tsurf_file), 96, 48, 730)
+    println("✓")
+    
+    print("  • Zonal wind (850 hPa)... ")
+    global uclim .= read_grads_binary(joinpath(input_dir, uwind_file), 96, 48, 730)
+    println("✓")
+    
+	print("  • Meridional wind (850 hPa)... ")
+	global vclim .= read_grads_binary(joinpath(input_dir, vwind_file), 96, 48, 730)
+	println("✓")
+    
+    print("  • Atmospheric humidity... ")
+    global qclim .= read_grads_binary(joinpath(input_dir, humid_file), 96, 48, 730)
+    println("✓")
+    
+    print("  • Cloud cover... ")
+    global cldclim .= read_grads_binary(joinpath(input_dir, "isccp.cloud_cover.clim.bin"), 96, 48, 730)
+    println("✓")
+    
+    print("  • Soil moisture... ")
+    global swetclim .= read_grads_binary(joinpath(input_dir, swet_file), 96, 48, 730)
+    println("✓")
+    
+    print("  • Ocean mixed-layer depth... ")
+    global mldclim .= read_grads_binary(joinpath(input_dir, "woce.ocean_mixed_layer_depth.clim.bin"), 96, 48, 730)
+    println("✓")
+    
+    print("  • Deep ocean temperature... ")
+    global Toclim .= read_grads_binary(joinpath(input_dir, "Tocean.clim.bin"), 96, 48, 730)
+    println("✓")
+    
+    # ─── MSCM-specific fields ────────────────────────────────────────
+    println("\n[3/4] Loading MSCM-specific fields...")
+    
+    print("  • Vertical velocity (omega)... ")
+    # Use ERA-Interim omega climatology for all datasets
+    omega_file = "erainterim.omega.vertmean.clim.bin"
+	if isfile(joinpath(input_dir, omega_file))
+		global omegaclim .= read_grads_binary(joinpath(input_dir, omega_file), 96, 48, 730)
+		println("✓")
+	else
+		global omegaclim .= 0.0
+		@warn "Omega file not found, using zeros" file=joinpath(input_dir, omega_file)
+		println("⚠")
+	end
+    
+    print("  • Omega std deviation... ")
+    # Use ERA-Interim omega std climatology for all datasets
+    omegastd_file = "erainterim.omega_std.vertmean.clim.bin"
+	if isfile(joinpath(input_dir, omegastd_file))
+		global omegastdclim .= read_grads_binary(joinpath(input_dir, omegastd_file), 96, 48, 730)
+		println("✓")
+	else
+		global omegastdclim .= 0.0
+		@warn "Omega std file not found, using zeros" file=joinpath(input_dir, omegastd_file)
+		println("⚠")
+	end
+    
+	print("  • Wind speed... ")
+	# Load ERA-Interim windspeed file for all datasets
+	ws_file = "erainterim.windspeed.850hpa.clim.bin"
+	ws_path = joinpath(input_dir, ws_file)
+	if isfile(ws_path)
+		global wsclim .= read_grads_binary(ws_path, 96, 48, 730)
+		println("✓")
+	else
+		global wsclim .= 0.0
+		@warn "Windspeed file not found, using zeros" file=ws_path
+		println("⚠")
+	end
+    
+    # ─── Solar radiation ────────────────────────────────────────────────
+    println("\n[4/4] Loading solar radiation...")
+    # Note: Flux corrections (TF_correct, qF_correct, ToF_correct) are loaded conditionally
+    # within greb_model!() when log_exp==1 && cfg.log_qflux_dmc and only as needed.
+    
+    print("  • Solar radiation (48×730)... ")
+    global sw_solar .= read_grads_binary(joinpath(input_dir, "solar_radiation.clim.bin"), 1, 48, 730)
+    println("✓")
+    
+    println("\n═══════════════════════════════════════════════════════════")
+    println("  ✓ All climate data loaded successfully!")
+    println("═══════════════════════════════════════════════════════════\n")
+    
+    return nothing
 end
 
 # ╔═╡ 8578d6aa-2782-4279-8f6b-78194b8ecc10
@@ -264,10 +491,6 @@ begin
 	ipx = 1          # longitude index for diagnostics
 	ipy = 1          # latitude index for diagnostics
 
-	# 🎯 Output parity mode
-	# false: analysis-friendly (absolute fields, precip/evap in mm/day)
-	# true: Fortran parity (scenario-minus-control anomalies, precip/evap in kg/m²/s)
-	FORTRAN_OUTPUT_PARITY = false
 end;
 
 # ╔═╡ 813d59f7-eeea-402a-96e8-e5cbe2fd4582
@@ -306,11 +529,83 @@ md"""
 Experiment control (`log_exp`) and advanced MSCM-style physics switches for process deconstruction.
 """
 
+# ╔═╡ 19f106e4-2b82-47e1-9284-799a105f30cb
+Base.@kwdef struct PhysicsConfig
+	log_clouds_dmc::Bool = true
+	log_vapor_dmc::Bool = true
+	log_ice_dmc::Bool = true
+	log_crcl_dmc::Bool = true
+	log_hydro_dmc::Bool = true
+	log_deepocean_dmc::Bool = true
+	log_atmos_dmc::Bool = true
+	log_co2_dmc::Bool = true
+	log_ocean_dmc::Bool = true
+	log_qflux_dmc::Bool = true
+	log_clouds_drsp::Bool = true
+	log_vapor_drsp::Bool = true
+	log_ice_drsp::Bool = true
+	log_crcl_drsp::Bool = true
+	log_hydro_drsp::Bool = true
+	log_deepocean_drsp::Bool = true
+	log_topo_drsp::Bool = true
+	log_humid_drsp::Bool = true
+	log_ice::Bool = true
+	log_hdif::Bool = true
+	log_hadv::Bool = true
+	log_vdif::Bool = true
+	log_vadv::Bool = true
+	log_conv::Bool = true
+	log_rain::Int = 0
+	log_eva::Int = -1
+	log_clim::Int = 0
+	log_tsurf_ext::Bool = false
+	log_hwind_ext::Bool = false
+	log_omega_ext::Bool = false
+end
+
 # ╔═╡ 54e63724-44ca-42b9-9246-7afb271b8154
 md"""
 ### Hydrology Parameters
 Optimized parameter system with lookup table for different parameterization modes and climatology datasets.
 """
+
+# ╔═╡ 32b531ab-ee71-4685-af65-a2bae0b868f6
+begin
+	# 💧 Optimized Hydrology Parameter Lookup Table ────────────────────────
+	const HYDRO_PARAMS = (
+		-1 => (1.0, 0.0, 0.0, 0.0),                    # Original GREB
+		 1 => (-1.391649, 3.018774, 0.0, 0.0),        # +Relative humidity
+		 2 => (0.862162, 0.0, -29.02096, 0.0),        # +Omega convergence
+		 3 => (-0.2685845, 1.4591853, -26.9858807, 0.0), # +RH & Omega
+		 0 => (-1.88, 2.25, -17.69, 59.07)            # Best GREB (ERA-Interim)
+	)
+	
+	# 🗂️ Pre-allocated Workspace Arrays (reduces dynamic allocation) ─────────
+	global temp_2d_1 = zeros(Float64, xdim, ydim)     # General 2D temporary array 1
+	global temp_2d_2 = zeros(Float64, xdim, ydim)     # General 2D temporary array 2
+	global temp_2d_3 = zeros(Float64, xdim, ydim)     # General 2D temporary array 3
+	global temp_2d_4 = zeros(Float64, xdim, ydim)     # General 2D temporary array 4
+	
+	# 🎯 Cached Weight Arrays (avoid recomputation in diffusion/advection) ───
+	global WZ_CACHE = Dict{Float64, Matrix{Float64}}()
+	
+	# ⚙️ Optimized Parameter Initialization ──────────────────────────────────
+	function set_hydrology_parameters!(cfg::PhysicsConfig)
+		global c_q, c_rq, c_omega, c_omegastd
+		
+		# Fast lookup instead of if-else chain
+		params = get(HYDRO_PARAMS, cfg.log_rain, (1.0, 0.0, 0.0, 0.0))
+		c_q, c_rq, c_omega, c_omegastd = params
+		
+		# Complete climatology adjustment
+		if cfg.log_rain == 0 && cfg.log_clim == 1
+			# NCEP parameter set (missing from original Julia version)
+			c_q, c_rq, c_omega, c_omegastd = -1.27, 1.99, -16.54, 21.15
+		end
+		
+		@info "⚙️ MSCM hydrology: log_rain=$(cfg.log_rain), log_clim=$(cfg.log_clim) → (c_q=$c_q, c_rq=$c_rq, c_omega=$c_omega, c_omegastd=$c_omegastd)"
+	end
+end;
 
 # ╔═╡ caec8065-9874-4d8c-8e7e-598a97506f06
 md"""
@@ -527,6 +822,9 @@ begin
 	# ── Regression factor ───────────────────────────────────────────
 	r_qviwv   = 2.6736e3                      # VIWV ↔ q_air regression factor [kg/m³]
 
+	# ── solar factor ────────────────────────────────────────────────
+	S0_var = 100.0  						  # variation of solar constant [%], default 100%
+
 	# ── Precomputed transport geometry & coefficients ───────────────
 	deg_grid  = 2.0 * const_pi * 6.371e6 / 360.0
 	dyy_grid  = dlat * deg_grid
@@ -739,7 +1037,7 @@ end;
 
 # ╔═╡ 1bdeea50-a73b-47a5-b941-d9d3374f54cf
 begin
-	# ── Control run monthly storage (MSCM) ──────────────────────
+	# ── Control run monthly storage ──────────────────────
 	# Store monthly means from control run for comparison
 	Tmn_ctrl    = zeros(Float64, xdim, ydim, 12)   # control surface temperature
 	Tamn_ctrl   = zeros(Float64, xdim, ydim, 12)   # control air temperature
@@ -788,14 +1086,6 @@ Utility functions for area-weighted diagnostics and ice fraction computation.
 
 # ╔═╡ 5842dab4-b354-40a4-9057-a3752d525c10
 begin
-	# ── Area-weighted global mean with latitude weighting ───────────
-	gmean_lat_weights = cosd.(lat_grid)
-	
-	function gmean(field)
-		weighted_sum = sum(field .* reshape(gmean_lat_weights, 1, ydim))
-		return weighted_sum / (xdim * sum(gmean_lat_weights))
-	end
-	
 	# ── Ice fraction computation from temperature thresholds ────────
 	function ice_fraction_field(Ts, ws::CirculationWorkspace=circ_workspace)
 		ice = ws.temp_buf
@@ -878,6 +1168,68 @@ Computes surface albedo from ice-cover thresholds (separate for land and ocean),
 - SW flux broadcast: each longitude row gets `SW_solar[:,ityr] x (1 − α[i,:])`
 """
 
+# ╔═╡ 1df2b91b-be14-427a-87b3-95cdef26ce00
+function SWradiation!(Ts1, timestate::TimeState, log_exp::Int, cfg::PhysicsConfig,                         ws::CirculationWorkspace)
+
+	# ── Atmospheric albedo from cloud climatology ──────────────
+	cld = @view cldclim[:, :, timestate.ityr]
+	a_atmos = @. cld * a_cloud
+
+	# ── Surface albedo ─────────────────────────────────────────
+	a_surf = ws.a_surf_buf
+
+	# Land: albedo = f(Ts) with ice thresholds Tl_ice1 / Tl_ice2
+	# Use static scheduling for deterministic results
+	Threads.@threads :static for j in 1:ydim
+		for i in 1:xdim
+			if z_topo[i,j] >= 0.0                         # land
+				if Ts1[i,j] <= Tl_ice1
+					a_surf[i,j] = a_no_ice + da_ice             # full ice
+				elseif Ts1[i,j] >= Tl_ice2
+					a_surf[i,j] = a_no_ice                      # ice-free
+				else
+					a_surf[i,j] = a_no_ice + da_ice * (1.0 - (Ts1[i,j] - Tl_ice1) / (Tl_ice2 - Tl_ice1))
+				end
+			else                                              # ocean
+				if Ts1[i,j] <= To_ice1
+					a_surf[i,j] = a_no_ice + da_ice             # full ice
+				elseif Ts1[i,j] >= To_ice2
+					a_surf[i,j] = a_no_ice                      # ice-free
+				else
+					a_surf[i,j] = a_no_ice + da_ice * (1.0 - (Ts1[i,j] - To_ice1) / (To_ice2 - To_ice1))
+				end
+			end
+		end
+	end
+
+	# Glacier cells always get full ice albedo
+	@. a_surf = ifelse(glacier > 0.5, a_no_ice + da_ice, a_surf)
+
+	# Sensitivity experiments: no ice-albedo feedback
+	if log_exp <= 5
+		a_surf .= a_no_ice
+	end
+
+	# SWradiation applies log_ice as the direct ice-albedo gate.
+	if !cfg.log_ice
+		a_surf .= a_no_ice
+	end
+
+	# ── Combined albedo & SW flux ──────────────────────────────
+	albedo = @. a_surf + a_atmos - a_surf * a_atmos
+
+	global temp_2d_4
+	sw = temp_2d_4
+	@simd for i in 1:xdim
+		# Apply solar forcing for experiments (e.g., 27-28: solar constant changes)
+		solar_flux = sw_solar[:, timestate.ityr]
+		solar_flux = solar_flux .* sw_solar_forcing_state[] .* (0.01 * S0_var)
+		@views sw[i, :] .= solar_flux .* (1.0 .- albedo[i, :])
+	end
+
+	return (SW = sw, albedo = albedo)
+end
+
 # ╔═╡ 2a859d43-5768-4b98-88fa-978b12203513
 md"""
 ## 🌙 `LWradiation` - Long-Wave Radiation
@@ -892,6 +1244,45 @@ Computes emissivity from CO₂, water-vapour column and cloud cover, then derive
 - `LW_surf = -σ x Ts⁴`
 - `LWair_down = -em x σ x (Ta + dTrad)⁴` and `LWair_up = LWair_down`
 """
+
+# ╔═╡ c0c40037-4169-4d38-bebe-2086cebc24f2
+function LWradiation!(Ts1, Ta1, q1, CO2, timestate::TimeState, log_exp::Int, cfg::PhysicsConfig, ws::CirculationWorkspace)
+	
+	# ── Effective column amounts (pressure-scaled) ─────────────
+	e_co2   = zeros(Float64, xdim, ydim)       # CO₂ (spatial)
+	e_vapor = @. wz_air * r_qviwv * q1         # water vapour
+	e_cloud = @view cldclim[:, :, timestate.ityr]        # clouds
+
+	# Apply spatial CO₂ masking for regional experiments
+	# Spatial threading (grid-independent)
+	Threads.@threads :static for j in 1:ydim
+		for i in 1:xdim
+			e_co2[i, j] = wz_air[i, j] * CO2 * co2_part[i, j]
+		end
+	end
+
+	# ── Emissivity (log-regression with 10 parameters) ─────────
+	em = @. p_emi[4] * log(p_emi[1] * e_co2 + p_emi[2] * e_vapor + p_emi[3]) +
+		    p_emi[7] +
+		    p_emi[5] * log(p_emi[1] * e_co2   + p_emi[3]) +
+		    p_emi[6] * log(p_emi[2] * e_vapor + p_emi[3])
+
+	# Cloud adjustment (in-place)
+	@. em = (p_emi[8] - e_cloud) / p_emi[9] * (em - p_emi[10]) + p_emi[10]
+
+	# ── Fluxes ──────────────────────────────────────────────────
+	LW_surf    = @. -σ * Ts1^4
+	dTr        = @view dTrad[:, :, timestate.ityr]
+	LWair_down = @. -em * σ * (Ta1 + dTr)^4
+	LWair_up   = LWair_down
+
+	# Mean-state atmosphere deconstruction parity with Fortran
+	if !cfg.log_atmos_dmc
+		LWair_down .= 0.0
+	end
+
+	return (LW_surf = LW_surf, LWair_up = LWair_up, LWair_down = LWair_down, em = em)
+end
 
 # ╔═╡ 0febe534-237e-4921-b39c-3828dbae9d19
 md"""
@@ -908,6 +1299,138 @@ Computes latent heat fluxes and water-vapour tendencies (evaporation and rain).
 - Rain: `dq_rain = cq_rain x q`
 - Atmospheric latent heat: `Q_lat_air = -dq_rain x cq_latent x r_qviwv`
 """
+
+# ╔═╡ 606032a2-b2ca-4fd8-9930-afd83aecec7a
+function hydro!(Ts1, q1, timestate::TimeState, log_exp::Int, cfg::PhysicsConfig, ws::CirculationWorkspace=circ_workspace)
+
+	# Use pre-allocated zero buffers 
+	fill!(ws.zero_buf1, 0.0)
+	fill!(ws.zero_buf2, 0.0)
+	fill!(ws.zero_buf3, 0.0)
+	fill!(ws.zero_buf4, 0.0)
+
+	# Process control switches
+	!cfg.log_atmos_dmc && return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
+	!cfg.log_hydro_dmc && return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
+	!cfg.log_hydro_drsp && return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
+	
+	# Sensitivity experiments with no hydrological feedback
+	if log_exp <= 6 || log_exp == 13 || log_exp == 15
+		return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
+	end
+
+	# ── Get climatology fields ──────────────────────────
+	u = @view uclim[:, :, timestate.ityr]
+	v = @view vclim[:, :, timestate.ityr]
+	swet = @view swetclim[:, :, timestate.ityr]
+	omega = @view omegaclim[:, :, timestate.ityr]
+	omegastd = @view omegastdclim[:, :, timestate.ityr]
+
+	# ── Saturated humidity (Clausius–Clapeyron + topo-pressure) ─
+	qs = @. 3.75e-3 * exp(17.08085 * (Ts1 - 273.15) / (Ts1 - 273.15 + 234.175)) *
+		wz_air
+
+	# ── Enhanced Evaporation Modes ──────────────────────────
+	if cfg.log_eva == -1  # Original GREB model
+		# +2 m/s land gustiness, +3 m/s ocean gustiness, uniform ce.
+		wind_eff = @. sqrt(u^2 + v^2)
+		@. wind_eff = ifelse(z_topo > 0.0,
+			sqrt(wind_eff^2 + 2.0^2),
+			sqrt(wind_eff^2 + 3.0^2))
+		Q_lat = @. (q1 - qs) * wind_eff * cq_latent * ρ_air * ce * swet
+		
+	elseif cfg.log_eva == 0  # Skin temperature version
+		# Enhanced with skin temperature offset and wsclim integration
+		Tskin_offset = @. (z_topo > 0.5) ? 5.0 : 1.0  # Land +5K, Ocean +1K   
+		Tskin = @. max(Ts1 + Tskin_offset, 200.0)  # Prevent unrealistic temps
+		
+		# Recalculate saturation with skin temperature
+		qs_skin = @. 3.75e-3 * exp(17.08085 * (Tskin - 273.15) / (Tskin - 273.15 + 234.175)) * wz_air
+		
+		# Use wsclim if available, otherwise computed wind
+		ws_view = @view wsclim[:, :, timestate.ityr]
+		if maximum(abs, ws_view) > 1e-10  # Check if real data
+			ws_base = ws_view
+		else
+			ws_base = @. sqrt(u^2 + v^2)
+		end
+		gustiness_land = 11.5  
+		gustiness_ocean = 5.4  
+		wind_eff = @. (z_topo > 0.5) ? sqrt(ws_base^2 + gustiness_land^2) : sqrt(ws_base^2 + gustiness_ocean^2)
+
+		# Mode 0 coefficients 
+		cE_land = 0.25 * ce  
+		cE_ocean = 0.58 * ce 
+		cE = @. (z_topo > 0.5) ? cE_land : cE_ocean 
+		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs_skin - q1) * swet
+		
+	elseif cfg.log_eva == 1  # Enhanced land/ocean coefficients 
+		# Improved parameterization with different land/ocean physics
+		gustiness_land = 144.0   
+		gustiness_ocean = 7.1    
+		wind_eff = @. (z_topo > 0.5) ? sqrt(u^2 + v^2 + gustiness_land^2) : sqrt(u^2 + v^2 + gustiness_ocean^2)
+		
+		# Enhanced coefficients from MSCM calibration
+		cE_land = 0.04 * ce   
+		cE_ocean = 0.73 * ce  
+		cE = @. (z_topo > 0.5) ? cE_land : cE_ocean
+		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
+		
+	elseif cfg.log_eva == 2  # Wind climatology version  
+		# Always uses wsclim instead of computed wind components
+		ws_view = @view wsclim[:, :, timestate.ityr]
+		if maximum(abs, ws_view) < 1e-10
+			@warn "Mode 2 requires wsclim data. Falling back to computed wind."
+			ws_base = @. sqrt(u^2 + v^2)
+		else
+			ws_base = ws_view  # Use wind speed climatology
+		end
+		
+		# gustiness values: land=9.0, ocean=4.0
+		gustiness_land = 9.0    
+		gustiness_ocean = 4.0    
+		wind_eff = @. (z_topo > 0.5) ? sqrt(ws_base^2 + gustiness_land^2) : sqrt(ws_base^2 + gustiness_ocean^2)
+		
+		# Mode 2 coefficients (wsclim-optimized)
+		cE_land = 0.56 * ce   
+		cE_ocean = 0.79 * ce  
+		cE = @. (z_topo > 0.5) ? cE_land : cE_ocean 
+		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
+	else
+		@warn "Unknown log_eva mode: $(cfg.log_eva). Using original GREB."
+		# Fallback to original GREB
+		gustiness = @. (z_topo > 0.5) ? 3.0 : 10.0
+		wind_eff = @. sqrt(u^2 + v^2 + gustiness^2)
+		cE = @. (z_topo > 0.5) ? 0.65e-3 : 1.15e-3
+		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
+	end
+
+	# ── Precipitation system (Eq. 11 in Stassen et al 2019) ────────────────────────
+	if cfg.log_rain != -1
+		rq = @. q1 / qs
+		dq_rain = @. (c_q + c_rq * rq + c_omega * omega + c_omegastd * omegastd) * cq_rain * q1
+
+		if cfg.log_rain == 1
+			limit_value = @. -0.0015 / (wz_vapor * r_qviwv * 86400.0)
+			# Fortran parity: where dq_rain >= limit, set to limit.
+			dq_rain = @. min(dq_rain, limit_value)
+		end
+	else
+		# Original GREB precipitation (log_rain == -1)
+		dq_rain = @. cq_rain * q1
+	end
+
+	# ── Water-vapour tendencies ─────────────────────────────
+	dq_eva  = @. -Q_lat / cq_latent / r_qviwv        # evaporation
+	
+	# Clamp precipitation to avoid negative humidity
+	dq_rain = @. max(dq_rain, -0.9 * q1 / Δt)
+
+	# ── Atmospheric latent heat ────────────────────────────
+	Q_lat_air = @. -dq_rain * cq_latent * r_qviwv
+
+	return (Q_lat = Q_lat, Q_lat_air = Q_lat_air, dq_eva = dq_eva, dq_rain = dq_rain)
+end;
 
 # ╔═╡ a1c04c52-f7c9-430a-8791-7fea15650b2c
 md"""
@@ -975,6 +1498,66 @@ Computes mixed-layer ↔ deep-ocean heat exchange via entrainment/detrainment an
 - Turbulent mixing: `co_turb x (T_x − To)` with `T_x = max(To_ice2, Ts)`
 """
 
+# ╔═╡ 625089e2-ef77-4821-a6d6-d0a0f88207f2
+function deep_ocean!(Ts1, To1, timestate::TimeState, log_exp::Int, cfg::PhysicsConfig, ws::CirculationWorkspace=circ_workspace)
+	
+	# Use pre-allocated zero buffers 
+	fill!(ws.zero_buf1, 0.0)
+	fill!(ws.zero_buf2, 0.0)
+	dT_ocean = ws.zero_buf1
+	dTo = ws.zero_buf2
+	
+	# Process control switches
+	!cfg.log_deepocean_dmc && return (dT_ocean = dT_ocean, dTo = dTo)
+	!cfg.log_deepocean_drsp && return (dT_ocean = dT_ocean, dTo = dTo)
+
+	# Sensitivity experiments with no deep-ocean coupling
+	if log_exp <= 9 || log_exp == 11
+		return (dT_ocean = dT_ocean, dTo = dTo)
+	end
+	if 14 <= log_exp && log_exp <= 16
+		return (dT_ocean = dT_ocean, dTo = dTo)
+	end
+
+	# ── Change in mixed-layer depth ─────────────────────────
+	mld_now  = @view mldclim[:, :, timestate.ityr]
+	mld_prev = timestate.ityr > 1 ? (@view mldclim[:, :, timestate.ityr - 1]) : (@view mldclim[:, :, nstep_yr])
+	dmld = @. mld_now - mld_prev
+
+	# ── Entrainment & detrainment ─────────────────────────
+	# Thread over grid points (independent)
+	Threads.@threads :static for j in 1:ydim
+		for i in 1:xdim
+			z_topo[i,j] >= 0.0 && continue                   # skip land
+			Ts1[i,j] < To_ice2 && continue                   # skip ice-covered
+			if dmld[i,j] < 0.0
+				# Entrainment: mixed layer shallows → deep ocean warms
+				dTo[i,j] = -dmld[i,j] / (z_ocean[i,j] - mld_now[i,j]) * (Ts1[i,j] - To1[i,j])
+			elseif dmld[i,j] > 0.0
+				# Detrainment: mixed layer deepens → surface cools
+				dT_ocean[i,j] = dmld[i,j] / mld_now[i,j] * (To1[i,j] - Ts1[i,j])
+			end
+		end
+	end
+
+	# Efficiency factor
+	c_effmix = 0.5
+	dTo      .*= c_effmix
+	dT_ocean .*= c_effmix
+
+	# ── Turbulent mixing ─────────────────────────────────
+	Threads.@threads :static for j in 1:ydim
+		for i in 1:xdim
+			z_topo[i,j] >= 0.0 && continue
+			Tx = max(To_ice2, Ts1[i,j])
+			dTo[i,j] += Δt * co_turb * (Tx - To1[i,j]) / (cap_ocean * (z_ocean[i,j] - mld_now[i,j]))
+			dT_ocean[i,j] += Δt * co_turb * (To1[i,j] - Tx) / (cap_ocean * mld_now[i,j])
+		end
+	end
+
+	return (dT_ocean = dT_ocean, dTo = dTo)
+end
+
 # ╔═╡ a4cd8d40-eedd-4a4b-ac17-51e68334328c
 md"""
 ## 🌀 `circulation` - Atmospheric Circulation
@@ -1004,6 +1587,101 @@ Applies topography-weighted diffusion on a lat–lon grid with periodic longitud
 - Final result scaled by `exp(-z_topo / h_scl)` (pressure weighting)
 """
 
+# ╔═╡ ba96178d-77d4-4f26-a94f-5ad43c5242db
+function diffusion!(T1::Matrix{Float64}, h_scl::Float64, ws::CirculationWorkspace, timestate::TimeState)::Matrix{Float64}
+	# Use workspace buffers instead of temp_2d_*
+	dX_diffuse = ws.dX_diff
+	fill!(dX_diffuse, 0.0)  # Clear workspace
+
+	# ── Precomputed geometry/coefficients ───────────────────
+	dxlat = dxlat_grid
+	ccy  = ccy_diff
+	ccx  = ccx_diff
+	# Use cached weight arrays
+	wz = if h_scl == z_air
+		wz_air
+	elseif h_scl == z_vapor
+		wz_vapor
+	else
+		get!(WZ_CACHE, h_scl) do
+			@. exp(-z_topo / h_scl)
+		end
+	end
+
+	dTx = ws.dTx
+	dTy = ws.dTy
+	fill!(dTx, 0.0)
+	fill!(dTy, 0.0)
+
+	@inbounds for k in 1:ydim
+		# ── Latitudinal diffusion (2nd-order centred) ────────
+		if k >= 2 && k <= ydim - 1
+			@inbounds for j in 1:xdim
+				dTy[j,k] = ccy * (wz[j,k-1] * (T1[j,k-1] - T1[j,k]) +
+				                   wz[j,k+1] * (T1[j,k+1] - T1[j,k]))
+			end
+		elseif k == 1
+			@inbounds for j in 1:xdim
+				dTy[j,k] = ccy * wz[j,k+1] * (-T1[j,k] + T1[j,k+1])
+			end
+		else  # k == ydim
+			@inbounds for j in 1:xdim
+				dTy[j,k] = ccy * wz[j,k-1] * (T1[j,k-1] - T1[j,k])
+			end
+		end
+
+		# ── Longitudinal diffusion ───────────────────────────
+		if dxlat[k] > 2.5e5   # moderate latitudes: single-step 3rd-order
+			@inbounds for j in 1:xdim
+				jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
+				jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
+				jm3 = lon_jm3[j]; jp3 = lon_jp3[j]
+
+				dTx[j,k] = ccx[k] * (
+					10 * (wz[jm1,k] * (T1[jm1,k] - T1[j,k]) + wz[jp1,k] * (T1[jp1,k] - T1[j,k])) +
+					 4 * (wz[jm2,k] * (T1[jm2,k] - T1[jm1,k]) + wz[jm1,k] * (T1[j,k] - T1[jm1,k])) +
+					 4 * (wz[jp1,k] * (T1[j,k] - T1[jp1,k]) + wz[jp2,k] * (T1[jp2,k] - T1[jp1,k])) +
+					 1 * (wz[jm3,k] * (T1[jm3,k] - T1[jm2,k]) + wz[jm2,k] * (T1[jm1,k] - T1[jm2,k])) +
+					 1 * (wz[jp2,k] * (T1[jp1,k] - T1[jp2,k]) + wz[jp3,k] * (T1[jp3,k] - T1[jp2,k]))
+				) / 20.0
+			end
+		else  # near-polar latitudes: sub-time-stepping
+			dd     = max(1, round(Int, Δt_crcl / (1.0 * dxlat[k]^2 / κ)))
+			dtdff2 = Δt_crcl / dd
+			time2  = max(1, round(Int, Δt_crcl / dtdff2))
+			ccx2   = κ * dtdff2 / dxlat[k]^2
+
+			# Use workspace buffers (no allocation)
+			copyto!(ws.T1h_buf, view(T1, :, k))  # Copy latitude row
+			fill!(ws.dTxh_buf, 0.0)
+
+			for _tt2 in 1:time2
+				for j in 1:xdim
+					jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
+					jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
+					jm3 = lon_jm3[j]; jp3 = lon_jp3[j]
+
+					ws.dTxh_buf[j] = ccx2 * (
+						10 * (wz[jm1,k] * (ws.T1h_buf[jm1] - ws.T1h_buf[j]) + wz[jp1,k] * (ws.T1h_buf[jp1] - ws.T1h_buf[j])) +
+						 4 * (wz[jm2,k] * (ws.T1h_buf[jm2] - ws.T1h_buf[jm1]) + wz[jm1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jm1])) +
+						 4 * (wz[jp1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jp1]) + wz[jp2,k] * (ws.T1h_buf[jp2] - ws.T1h_buf[jp1])) +
+						 1 * (wz[jm3,k] * (ws.T1h_buf[jm3] - ws.T1h_buf[jm2]) + wz[jm2,k] * (ws.T1h_buf[jm1] - ws.T1h_buf[jm2])) +
+						 1 * (wz[jp2,k] * (ws.T1h_buf[jp1] - ws.T1h_buf[jp2]) + wz[jp3,k] * (ws.T1h_buf[jp3] - ws.T1h_buf[jp2]))
+					) / 20.0
+				end
+				# Stability clamp: no negative q
+				@. ws.dTxh_buf = ifelse(ws.dTxh_buf <= -ws.T1h_buf, -0.9 * ws.T1h_buf, ws.dTxh_buf)
+				ws.T1h_buf .+= ws.dTxh_buf
+			end
+			dTx[:, k] .= ws.T1h_buf .- T1[:, k]
+		end
+	end
+
+	# Final result: weighted by pressure (reuse wz = exp(-z_topo/h_scl))
+	@. dX_diffuse = wz * (dTx + dTy)
+	return dX_diffuse
+end
+
 # ╔═╡ 99f0e9ad-438f-4fa5-be9d-36d0fa78d89c
 md"""
 ## ➡️ `advection` - Upwind Advection
@@ -1017,6 +1695,118 @@ Upwind scheme for meridional and zonal transport driven by climatological wind f
   + stability clamp
 - Sensitivity experiment `log_exp == 8` with `h_scl == z_vapor`: early return
 """
+
+# ╔═╡ 2bab06b9-ca98-4142-99cb-d2ad4f1cde93
+function advection!(T1::Matrix{Float64}, h_scl::Float64, ws::CirculationWorkspace, timestate::TimeState, log_exp::Int)::Matrix{Float64}
+	# Use workspace buffers
+	dX_advec = ws.dX_adv
+	fill!(dX_advec, 0.0)  # Clear workspace
+
+	# Sensitivity experiment 8: no vapour advection
+	(log_exp == 8 && h_scl == z_vapor) && return dX_advec
+
+	# ── Precomputed geometry/coefficients ───────────────────
+	dxlat = dxlat_grid
+	ccy   = ccy_adv
+	ccx   = ccx_adv
+	# Use cached weight arrays
+	wz = if h_scl == z_air
+		wz_air
+	elseif h_scl == z_vapor
+		wz_vapor
+	else
+		get!(WZ_CACHE, h_scl) do
+			@. exp(-z_topo / h_scl)
+		end
+	end
+
+	dTx = ws.dTx
+	dTy = ws.dTy
+	fill!(dTx, 0.0)
+	fill!(dTy, 0.0)
+
+	@inbounds for k in 1:ydim
+		# ── Meridional (v) advection ───────────────────────
+		@inbounds for j in 1:xdim
+			v = vclim[j, k, timestate.ityr]
+			if v >= 0.0
+				if k >= 3
+					dTy[j,k] = -v * ccy * (wz[j,k-1] * (T1[j,k] - T1[j,k-1]) +
+					                        wz[j,k-2] * (T1[j,k] - T1[j,k-2])) / 3.0
+				elseif k == 2
+					dTy[j,k] = -v * ccy * wz[j,k-1] * (T1[j,k] - T1[j,k-1])
+				else  # k == 1
+					dTy[j,k] = 0.0
+				end
+			else
+				if k <= ydim - 2
+					dTy[j,k] = v * ccy * (wz[j,k+1] * (T1[j,k] - T1[j,k+1]) +
+					                       wz[j,k+2] * (T1[j,k] - T1[j,k+2])) / 3.0
+				elseif k == ydim - 1
+					dTy[j,k] = v * ccy * wz[j,k+1] * (-T1[j,k] + T1[j,k+1])
+				else  # k == ydim
+					dTy[j,k] = 0.0
+				end
+			end
+		end
+
+		# ── Zonal (u) advection ───────────────────────────
+		if dxlat[k] > 2.5e5   # moderate latitudes
+			@inbounds for j in 1:xdim
+				jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
+				jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
+
+				u = uclim[j, k, timestate.ityr]
+				if u >= 0.0
+					dTx[j,k] = -u * ccx[k] * (wz[jm1,k] * (T1[j,k] - T1[jm1,k]) +
+					                          wz[jm2,k] * (T1[j,k] - T1[jm2,k])) / 3.0
+				else
+					dTx[j,k] =  u * ccx[k] * (wz[jp1,k] * (T1[j,k] - T1[jp1,k]) +
+					                          wz[jp2,k] * (T1[j,k] - T1[jp2,k])) / 3.0
+				end
+			end
+		else  # near-polar: sub-time-stepping
+			dd     = max(1, round(Int, Δt_crcl / (dxlat[k] / 10.0)))
+			dtdff2 = Δt_crcl / dd
+			time2  = max(1, round(Int, Δt_crcl / dtdff2))
+			ccx2   = dtdff2 / dxlat[k] / 2.0
+
+			# Use workspace buffers (no allocation)
+			copyto!(ws.T1h_buf, view(T1, :, k))
+			fill!(ws.dTxh_buf, 0.0)
+
+			for _tt2 in 1:time2
+				for j in 1:xdim
+					jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
+					jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
+					jm3 = lon_jm3[j]; jp3 = lon_jp3[j]
+
+					u = uclim[j, k, timestate.ityr]
+					if u >= 0.0
+						ws.dTxh_buf[j] = -u * ccx2 * (
+							10 * wz[jm1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jm1]) +
+							 4 * wz[jm2,k] * (ws.T1h_buf[jm1] - ws.T1h_buf[jm2]) +
+							 1 * wz[jm3,k] * (ws.T1h_buf[jm2] - ws.T1h_buf[jm3])
+						) / 20.0
+					else
+						ws.dTxh_buf[j] =  u * ccx2 * (
+							10 * wz[jp1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jp1]) +
+							 4 * wz[jp2,k] * (ws.T1h_buf[jp1] - ws.T1h_buf[jp2]) +
+							 1 * wz[jp3,k] * (ws.T1h_buf[jp2] - ws.T1h_buf[jp3])
+						) / 20.0
+					end
+				end
+				# Stability clamp
+				@. ws.dTxh_buf = ifelse(ws.dTxh_buf <= -ws.T1h_buf, -0.9 * ws.T1h_buf, ws.dTxh_buf)
+				ws.T1h_buf .+= ws.dTxh_buf
+			end
+			dTx[:, k] .= ws.T1h_buf .- T1[:, k]
+		end
+	end
+
+	@. dX_advec = dTx + dTy
+	return dX_advec
+end
 
 # ╔═╡ 8fdcfefd-0490-434a-a2bb-d171557b6ae7
 md"""
@@ -1063,6 +1853,173 @@ Comprehensive forcing dispatcher supporting 50+ experiments. Replaces simple `co
 - 40-47: Regional/partial CO₂ experiments (NH/SH/tropics/ocean/land/seasonal)
 - 230, 240-241: Forced boundary conditions (requires external data)
 """
+
+# ╔═╡ 1894ad94-cdf8-4e79-a0e5-b72088db31be
+function forcing(it, year, log_exp, icmn_ctrl=zeros(xdim,ydim,12); nstep_yr=nstep_yr)
+	# Default CO₂ concentration
+	CO2 = 680.0
+	sw_solar_forcing = 1.0  # Solar forcing multiplier (ratio to reference)
+	
+	# 📜 Legacy experiments (preserve exact backward compatibility) ───────────
+	if log_exp == 1
+		CO2 = 550.0  # 550 ppm CO₂ steady state
+	elseif log_exp == 12 || log_exp == 13
+		CO2_1950 = 310.0;  CO2_2000 = 370.0;  CO2_2050 = 520.0
+		if year <= 2000
+			CO2 = CO2_1950 + 60.0 / 50.0 * (year - 1950)
+		elseif year <= 2050
+			CO2 = CO2_2000 + 150.0 / 50.0 * (year - 2000)
+		elseif year <= 2100
+			CO2 = CO2_2050 + 180.0 / 50.0 * (year - 2050)
+		end
+	
+	# 💨 CO₂ scaling experiments ──────────────────────────────────────────────
+	elseif log_exp == 20
+		CO2 = 2 * 340.0  # 2×CO₂
+	elseif log_exp == 21  
+		CO2 = 4 * 340.0  # 4×CO₂
+	elseif log_exp == 22
+		CO2 = 10 * 340.0  # 10×CO₂ 
+	elseif log_exp == 23
+		CO2 = 0.5 * 340.0  # 0.5×CO₂
+	elseif log_exp == 24
+		CO2 = 0.0  # 0×CO₂ (no greenhouse effect)
+	
+	# ☀️ Solar forcing experiments ───────────────────────────────────────────
+	elseif log_exp == 27
+		CO2 = 340.0  # Baseline CO₂
+		sw_solar_forcing = (1365.0 + 27.0) / 1365.0  # +27 W/m² solar constant
+	elseif log_exp == 28
+		CO2 = 340.0  # Baseline CO₂
+		# 11-year solar cycle: ±1 W/m² amplitude
+		sw_solar_forcing = (1365.0 + 1.0 * sin(2π * year / 11.0)) / 1365.0
+	
+	# 📈 Enhanced A1B scenario ──────────────────────────────────────────────
+	elseif log_exp == 95
+		CO2_1950 = 310.0;  CO2_2000 = 370.0;  CO2_2050 = 520.0
+		if year <= 2000
+			CO2 = CO2_1950 + 60.0 / 50.0 * (year - 1950)
+		elseif year <= 2050
+			CO2 = CO2_2000 + 150.0 / 50.0 * (year - 2000)  
+		elseif year <= 2100
+			CO2 = CO2_2050 + 180.0 / 50.0 * (year - 2050)
+		end
+
+		# ── Time-varying CO₂ experiments ────────────
+	elseif log_exp == 25
+		# CO₂ sine wave (30-year period)
+		CO2 = 340.0 + 170.0 + 170.0 * cos(2π * (year - 13.0) / 30.0)
+	elseif log_exp == 26
+		# CO₂ step function: 2×CO₂ until 1980, then 1×CO₂
+		CO2 = year >= 1980 ? 340.0 : 2 * 340.0
+	
+	# ── Paleoclimate experiments ────────────────────   
+	elseif log_exp == 30
+		# Paleo: 231kyr BP solar + CO₂=200ppm
+		CO2 = 200.0
+	elseif log_exp == 31  
+		# Paleo: 231kyr BP solar + modern CO₂
+		CO2 = 340.0
+	elseif log_exp == 32
+		# Paleo: modern solar + CO₂=200ppm (231kyr BP)
+		CO2 = 200.0
+	
+	# ── Orbital forcing experiments ─────────────────
+	elseif log_exp == 35
+		# Solar obliquity changes
+		CO2 = 340.0  # Baseline CO₂
+	elseif log_exp == 36
+		# Solar eccentricity changes  
+		CO2 = 340.0  # Baseline CO₂
+	elseif log_exp == 37
+		# Solar constant as function of Earth-Sun distance
+		CO2 = 340.0  # Baseline CO₂
+	
+	# 📂 File I/O dependent experiments (placeholders) ───────────────────────
+	elseif 96 <= log_exp && log_exp <= 99
+		# IPCC RCP scenarios - requires external CO₂ data files
+		error("Experiment $log_exp (RCP scenario) requires external data file. Not yet implemented.")
+	elseif log_exp == 100
+		# Custom CO₂ scenario - requires external trajectory file  
+		error("Experiment $log_exp (custom scenario) requires external data file. Not yet implemented.")
+
+	# 🌍 Regional/partial CO₂ experiments ────────────────────────────────────
+	elseif 40 <= log_exp && log_exp <= 47  
+		# Reset co2_part to full CO₂ first
+		co2_part .= 1.0
+
+		if log_exp == 40
+			# 2×CO₂ Northern Hemisphere only
+			CO2 = 2 * 340.0
+			co2_part[:, 1:24] .= 0.5
+		elseif log_exp == 41
+			# 2×CO₂ Southern Hemisphere only
+			CO2 = 2 * 340.0
+			co2_part[:, 25:48] .= 0.5
+		elseif log_exp == 42
+			# 2×CO₂ Tropics only
+			CO2 = 2 * 340.0
+			co2_part[:, 1:15] .= 0.5
+			co2_part[:, 33:48] .= 0.5
+			for i in 4:4:96
+				co2_part[i, 33] = 1.0
+				co2_part[i, 15] = 1.0
+			end
+		elseif log_exp == 43
+			# 2×CO₂ Extratropics only
+			CO2 = 2 * 340.0
+			co2_part[:, 16:32] .= 0.5
+			for i in 4:4:96
+				co2_part[i, 32] = 1.0
+				co2_part[i, 16] = 1.0
+			end
+		elseif log_exp == 44
+			# 2×CO₂ Ocean only (land + perennial ice reduced)
+			CO2 = 2 * 340.0
+			for j in 1:ydim, i in 1:xdim
+				if z_topo[i, j] > 0.0
+					co2_part[i, j] = 0.5
+				end
+			end
+			# Caller passes annual-mean ice in icmn_ctrl[:, :, 1] (replicated across 12 months).
+			icmn_ctrl1 = @view icmn_ctrl[:, :, 1]
+			for j in 1:ydim, i in 1:xdim
+				if icmn_ctrl1[i, j] >= 0.5
+					co2_part[i, j] = 0.5
+				end
+			end
+		elseif log_exp == 45
+			# 2×CO₂ Land/Ice only (ocean reduced, perennial ice restored to full)
+			CO2 = 2 * 340.0
+			for j in 1:ydim, i in 1:xdim
+				if z_topo[i, j] <= 0.0
+					co2_part[i, j] = 0.5
+				end
+			end
+			# Caller passes annual-mean ice in icmn_ctrl[:, :, 1] (replicated across 12 months).
+			icmn_ctrl1 = @view icmn_ctrl[:, :, 1]
+			for j in 1:ydim, i in 1:xdim
+				if icmn_ctrl1[i, j] >= 0.5
+					co2_part[i, j] = 1.0
+				end
+			end
+		elseif log_exp == 46
+			# 2×CO₂ Boreal Winter only (seasonal)
+			ityr_step = mod(it - 1, nstep_yr) + 1
+			CO2 = (ityr_step <= 181 || ityr_step >= 547) ? 2 * 340.0 : 340.0
+		elseif log_exp == 47
+			# 2×CO₂ Boreal Summer only (seasonal)
+			ityr_step = mod(it - 1, nstep_yr) + 1
+			CO2 = (ityr_step <= 181 || ityr_step >= 547) ? 340.0 : 2 * 340.0
+		end
+	
+	# 📊 Forced boundary condition experiments (handled in scenario loop) ───── 
+	elseif log_exp == 230 || log_exp == 240 || log_exp == 241
+		CO2 = 340.0
+	end
+	
+	return (CO2 = CO2, sw_solar_forcing = sw_solar_forcing)
+end
 
 # ╔═╡ 7b8e4130-7d8e-492a-a949-bd7fb6808dd6
 md"""
@@ -1219,6 +2176,15 @@ md"""
 Before running the model, load the climate input data from the `input/` directory:
 """
 
+# ╔═╡ 4995d3d8-1f95-41d8-be6c-50663edbce10
+begin
+	# Path to input data directory (adjust if needed)
+	input_data_dir = joinpath(@__DIR__, "greb-official-official", "greb-official-official", "input")
+	
+	# Load the data (choose dataset: :ncep, :era, or :era_ncep)
+	load_greb_input_data!(input_data_dir, dataset=:ncep)
+end
+
 # ╔═╡ 83e54812-2291-44e6-9b6e-0c0be57865d3
 md"""
 ---
@@ -1279,6 +2245,52 @@ begin
 	],
 	default=0
 )
+end
+
+# ╔═╡ 9bff59c5-4631-4091-8230-989a835788e5
+function seaice!(Ts0, timestate::TimeState, cfg::PhysicsConfig)
+	mld = @view mldclim[:, :, timestate.ityr]
+
+	for j in 1:ydim, i in 1:xdim
+		z_topo[i,j] >= 0.0 && continue          # skip land
+		if Ts0[i,j] <= To_ice1
+			cap_surf[i,j] = cap_land                             # full sea ice
+		elseif Ts0[i,j] >= To_ice2
+			cap_surf[i,j] = cap_ocean * mld[i,j]                 # open ocean
+		else
+			cap_surf[i,j] = cap_land + (cap_ocean * mld[i,j] - cap_land) /
+				(To_ice2 - To_ice1) * (Ts0[i,j] - To_ice1)       # partial ice
+		end
+	end
+
+	# Process control switches
+	if !cfg.log_ice_dmc || !cfg.log_ice_drsp
+		# No ice feedback: use simple land/ocean distinction
+		for j in 1:ydim, i in 1:xdim
+			if z_topo[i,j] >= 0.0
+				cap_surf[i,j] = cap_land
+			else
+				cap_surf[i,j] = cap_ocean * mld[i,j]
+			end
+		end
+		return
+	end
+
+	# Sensitivity experiments: no ice feedback
+	if log_exp <= 5
+		for j in 1:ydim, i in 1:xdim
+			if z_topo[i,j] >= 0.0
+				cap_surf[i,j] = cap_land
+			else
+				cap_surf[i,j] = cap_ocean * mld[i,j]
+			end
+		end
+	end
+
+	# Glacier cells always land-ice capacity
+	@. cap_surf = ifelse(glacier > 0.5, cap_land, cap_surf)
+
+	return nothing
 end
 
 # ╔═╡ 7969e897-121e-4fe0-9b75-36d21931357f
@@ -1377,8 +2389,7 @@ md"""
 # ╔═╡ 54e19b14-4bc1-4086-9015-ff2cd8f4afbf
 @bind hydro_clim_dataset Select([
 	0 => "ERA-Interim",
-	1 => "NCEP",
-	2 => "Alternative 2"
+	1 => "NCEP"
 ], default=0)
 
 # ╔═╡ efb23f98-fb75-42e6-8681-c5147a82a09c
@@ -1501,139 +2512,6 @@ begin
 	end
 end;
 
-# ╔═╡ 32b531ab-ee71-4685-af65-a2bae0b868f6
-begin
-	# 💧 Optimized Hydrology Parameter Lookup Table ────────────────────────
-	const HYDRO_PARAMS = (
-		-1 => (1.0, 0.0, 0.0, 0.0),                    # Original GREB
-		 1 => (-1.391649, 3.018774, 0.0, 0.0),        # +Relative humidity
-		 2 => (0.862162, 0.0, -29.02096, 0.0),        # +Omega convergence
-		 3 => (-0.2685845, 1.4591853, -26.9858807, 0.0), # +RH & Omega
-		 0 => (-1.88, 2.25, -17.69, 59.07)            # Best GREB (ERA-Interim)
-	)
-	
-	# 🗂️ Pre-allocated Workspace Arrays (reduces dynamic allocation) ─────────
-	global temp_2d_1 = zeros(Float64, xdim, ydim)     # General 2D temporary array 1
-	global temp_2d_2 = zeros(Float64, xdim, ydim)     # General 2D temporary array 2
-	global temp_2d_3 = zeros(Float64, xdim, ydim)     # General 2D temporary array 3
-	global temp_2d_4 = zeros(Float64, xdim, ydim)     # General 2D temporary array 4
-	
-	# 🎯 Cached Weight Arrays (avoid recomputation in diffusion/advection) ───
-	global WZ_CACHE = Dict{Float64, Matrix{Float64}}()
-	
-	# ⚙️ Optimized Parameter Initialization ──────────────────────────────────
-	function set_hydrology_parameters!()
-		global c_q, c_rq, c_omega, c_omegastd
-		
-		# Fast lookup instead of if-else chain
-		params = get(HYDRO_PARAMS, log_rain, (1.0, 0.0, 0.0, 0.0))
-		c_q, c_rq, c_omega, c_omegastd = params
-		
-		# Complete climatology adjustment (match Fortran MSCM exactly)
-		if log_rain == 0 && log_clim == 1
-			# NCEP parameter set (missing from original Julia version)
-			c_q, c_rq, c_omega, c_omegastd = -1.27, 1.99, -16.54, 21.15
-		end
-		
-		@info "⚙️ MSCM hydrology: log_rain=$log_rain, log_clim=$log_clim → (c_q=$c_q, c_rq=$c_rq, c_omega=$c_omega, c_omegastd=$c_omegastd)"
-	end
-end;
-
-# ╔═╡ ba96178d-77d4-4f26-a94f-5ad43c5242db
-function diffusion!(T1::Matrix{Float64}, h_scl::Float64, ws::CirculationWorkspace, timestate::TimeState)::Matrix{Float64}
-	# Use workspace buffers instead of temp_2d_*
-	dX_diffuse = ws.dX_diff
-	fill!(dX_diffuse, 0.0)  # Clear workspace
-
-	# ── Precomputed geometry/coefficients ───────────────────
-	dxlat = dxlat_grid
-	ccy  = ccy_diff
-	ccx  = ccx_diff
-	# Use cached weight arrays
-	wz = if h_scl == z_air
-		wz_air
-	elseif h_scl == z_vapor
-		wz_vapor
-	else
-		get!(WZ_CACHE, h_scl) do
-			@. exp(-z_topo / h_scl)
-		end
-	end
-
-	dTx = ws.dTx
-	dTy = ws.dTy
-	fill!(dTx, 0.0)
-	fill!(dTy, 0.0)
-
-	@inbounds for k in 1:ydim
-		# ── Latitudinal diffusion (2nd-order centred) ────────
-		if k >= 2 && k <= ydim - 1
-			@inbounds for j in 1:xdim
-				dTy[j,k] = ccy * (wz[j,k-1] * (T1[j,k-1] - T1[j,k]) +
-				                   wz[j,k+1] * (T1[j,k+1] - T1[j,k]))
-			end
-		elseif k == 1
-			@inbounds for j in 1:xdim
-				dTy[j,k] = ccy * wz[j,k+1] * (-T1[j,k] + T1[j,k+1])
-			end
-		else  # k == ydim
-			@inbounds for j in 1:xdim
-				dTy[j,k] = ccy * wz[j,k-1] * (T1[j,k-1] - T1[j,k])
-			end
-		end
-
-		# ── Longitudinal diffusion ───────────────────────────
-		if dxlat[k] > 2.5e5   # moderate latitudes: single-step 3rd-order
-			@inbounds for j in 1:xdim
-				jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
-				jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
-				jm3 = lon_jm3[j]; jp3 = lon_jp3[j]
-
-				dTx[j,k] = ccx[k] * (
-					10 * (wz[jm1,k] * (T1[jm1,k] - T1[j,k]) + wz[jp1,k] * (T1[jp1,k] - T1[j,k])) +
-					 4 * (wz[jm2,k] * (T1[jm2,k] - T1[jm1,k]) + wz[jm1,k] * (T1[j,k] - T1[jm1,k])) +
-					 4 * (wz[jp1,k] * (T1[j,k] - T1[jp1,k]) + wz[jp2,k] * (T1[jp2,k] - T1[jp1,k])) +
-					 1 * (wz[jm3,k] * (T1[jm3,k] - T1[jm2,k]) + wz[jm2,k] * (T1[jm1,k] - T1[jm2,k])) +
-					 1 * (wz[jp2,k] * (T1[jp1,k] - T1[jp2,k]) + wz[jp3,k] * (T1[jp3,k] - T1[jp2,k]))
-				) / 20.0
-			end
-		else  # near-polar latitudes: sub-time-stepping
-			dd     = max(1, round(Int, Δt_crcl / (1.0 * dxlat[k]^2 / κ)))
-			dtdff2 = Δt_crcl / dd
-			time2  = max(1, round(Int, Δt_crcl / dtdff2))
-			ccx2   = κ * dtdff2 / dxlat[k]^2
-
-			# Use workspace buffers (no allocation)
-			copyto!(ws.T1h_buf, view(T1, :, k))  # Copy latitude row
-			fill!(ws.dTxh_buf, 0.0)
-
-			for _tt2 in 1:time2
-				for j in 1:xdim
-					jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
-					jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
-					jm3 = lon_jm3[j]; jp3 = lon_jp3[j]
-
-					ws.dTxh_buf[j] = ccx2 * (
-						10 * (wz[jm1,k] * (ws.T1h_buf[jm1] - ws.T1h_buf[j]) + wz[jp1,k] * (ws.T1h_buf[jp1] - ws.T1h_buf[j])) +
-						 4 * (wz[jm2,k] * (ws.T1h_buf[jm2] - ws.T1h_buf[jm1]) + wz[jm1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jm1])) +
-						 4 * (wz[jp1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jp1]) + wz[jp2,k] * (ws.T1h_buf[jp2] - ws.T1h_buf[jp1])) +
-						 1 * (wz[jm3,k] * (ws.T1h_buf[jm3] - ws.T1h_buf[jm2]) + wz[jm2,k] * (ws.T1h_buf[jm1] - ws.T1h_buf[jm2])) +
-						 1 * (wz[jp2,k] * (ws.T1h_buf[jp1] - ws.T1h_buf[jp2]) + wz[jp3,k] * (ws.T1h_buf[jp3] - ws.T1h_buf[jp2]))
-					) / 20.0
-				end
-				# Stability clamp: no negative q
-				@. ws.dTxh_buf = ifelse(ws.dTxh_buf <= -ws.T1h_buf, -0.9 * ws.T1h_buf, ws.dTxh_buf)
-				ws.T1h_buf .+= ws.dTxh_buf
-			end
-			dTx[:, k] .= ws.T1h_buf .- T1[:, k]
-		end
-	end
-
-	# Final result: weighted by pressure (reuse wz = exp(-z_topo/h_scl))
-	@. dX_diffuse = wz * (dTx + dTy)
-	return dX_diffuse
-end
-
 # ╔═╡ 0be9bc61-1a59-4dfe-84f9-bb1a27ca30fc
 begin
 	# 🌡️ 3D climate fields (xdim, ydim, nstep_yr) ───────────────────
@@ -1669,15 +2547,6 @@ begin
 		qclim .= 0.0  # zero out humidity climatology
 	end
 	
-	if !log_clouds_dmc
-		# Note: cloud climatology would be zeroed here when implemented
-	end
-
-	if !log_ocean_dmc
-		# Ocean capacity becomes land capacity
-		# This will be applied in ocean functions
-	end
-	
 	# 🌬️ Precomputed wind sign splits (MSCM optimization) ───────────────────
 	uclim_m   = zeros(Float64, xdim, ydim, nstep_yr)   # negative u components
 	uclim_p   = zeros(Float64, xdim, ydim, nstep_yr)   # positive u components  
@@ -1696,346 +2565,11 @@ begin
 	nothing  # suppress output
 end;
 
-# ╔═╡ 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3
-"""
-    load_greb_input_data!(input_dir::String; dataset::Symbol=:ncep)
-
-Load all required GREB input files from the specified directory and populate
-the global climate field arrays in-place.
-
-# Arguments
-- `input_dir`: Path to the input/ directory containing .bin files
-- `dataset`: Climate dataset to use (`:ncep` (default), `:era`, or `:era_ncep`)
-
-# Modifies global arrays
-Populates: `z_topo`, `glacier`, `Tclim`, `uclim`, `vclim`, `qclim`, `mldclim`,
-`Toclim`, `cldclim`, `swetclim`, `sw_solar`, `TF_correct`, `qF_correct`,
-`ToF_correct`, and MSCM fields (`omegaclim`, `omegastdclim`, `wsclim`).
-"""
-function load_greb_input_data!(input_dir::String; dataset::Symbol=:ncep)
-    println("═══════════════════════════════════════════════════════════")
-    println("  Loading GREB Climate Data")
-    println("  Directory: $input_dir")
-    println("  Dataset: $dataset")
-    println("═══════════════════════════════════════════════════════════")
-    
-    # ─── Static 2D fields ───────────────────────────────────────────
-    println("\n[1/4] Loading static 2D fields...")
-    
-    print("  • Topography... ")
-    global z_topo .= read_grads_binary(joinpath(input_dir, "global.topography.bin"), 96, 48, 1)
-    println("✓")
-    
-    print("  • Glacier mask... ")
-    global glacier .= read_grads_binary(joinpath(input_dir, "greb.glaciers.bin"), 96, 48, 1)
-    println("✓")
-    
-    # ─── 3D climatology fields (96 × 48 × 730) ──────────────────────
-    println("\n[2/4] Loading 3D climatology fields (96×48×730)...")
-    
-    # Select dataset-specific files
-    if dataset == :ncep
-        tsurf_file = "ncep.tsurf.1948-2007.clim.bin"
-        uwind_file = "ncep.zonal_wind.850hpa.clim.bin"
-        vwind_file = "ncep.meridional_wind.850hpa.clim.bin"
-        humid_file = "ncep.atmospheric_humidity.clim.bin"
-        swet_file = "ncep.soil_moisture.clim.bin"
-    elseif dataset == :era
-        tsurf_file = "erainterim.tsurf.1979-2015.clim.bin"
-        uwind_file = "erainterim.zonal_wind.850hpa.clim.bin"
-        vwind_file = "erainterim.meridional_wind.850hpa.clim.bin"
-        humid_file = "erainterim.atmospheric_humidity.clim.bin"
-        swet_file = "ncep.soil_moisture.clim.bin"  # ERA doesn't have soil moisture
-    else  # :era_ncep mixed
-        tsurf_file = "erainterim.tsurf.1979-2015.clim.bin"
-        uwind_file = "ncep.zonal_wind.850hpa.clim.bin"
-        vwind_file = "ncep.meridional_wind.850hpa.clim.bin"
-        humid_file = "ncep.atmospheric_humidity.clim.bin"
-        swet_file = "ncep.soil_moisture.clim.bin"
-    end
-    
-    print("  • Surface temperature ($tsurf_file)... ")
-    global Tclim .= read_grads_binary(joinpath(input_dir, tsurf_file), 96, 48, 730)
-    println("✓")
-    
-    print("  • Zonal wind (850 hPa)... ")
-    global uclim .= read_grads_binary(joinpath(input_dir, uwind_file), 96, 48, 730)
-    println("✓")
-    
-    print("  • Meridional wind (850 hPa)... ")
-    if isfile(joinpath(input_dir, vwind_file))
-        global vclim .= read_grads_binary(joinpath(input_dir, vwind_file), 96, 48, 730)
-        println("✓")
-    else
-        @warn "Meridional wind file not found, using zeros" file=joinpath(input_dir, vwind_file)
-        println("⚠")
-    end
-    
-    print("  • Atmospheric humidity... ")
-    global qclim .= read_grads_binary(joinpath(input_dir, humid_file), 96, 48, 730)
-    println("✓")
-    
-    print("  • Cloud cover... ")
-    global cldclim .= read_grads_binary(joinpath(input_dir, "isccp.cloud_cover.clim.bin"), 96, 48, 730)
-    println("✓")
-    
-    print("  • Soil moisture... ")
-    global swetclim .= read_grads_binary(joinpath(input_dir, swet_file), 96, 48, 730)
-    println("✓")
-    
-    print("  • Ocean mixed-layer depth... ")
-    global mldclim .= read_grads_binary(joinpath(input_dir, "woce.ocean_mixed_layer_depth.clim.bin"), 96, 48, 730)
-    println("✓")
-    
-    print("  • Deep ocean temperature... ")
-    global Toclim .= read_grads_binary(joinpath(input_dir, "Tocean.clim.bin"), 96, 48, 730)
-    println("✓")
-    
-    # ─── MSCM-specific fields ────────────────────────────────────────
-    println("\n[3/4] Loading MSCM-specific fields...")
-    
-    print("  • Vertical velocity (omega)... ")
-    if dataset == :era
-        omega_file = "erainterim.omega.vertmean.clim.bin"
-    else
-        omega_file = "cmip5.omega.rcp85.ensmean.forcing.new.bin"  # NCEP doesn't have omega
-    end
-    global omegaclim .= read_grads_binary(joinpath(input_dir, omega_file), 96, 48, 730)
-    println("✓")
-    
-    print("  • Omega std deviation... ")
-    if dataset == :era
-        omegastd_file = "erainterim.omega_std.vertmean.clim.bin"
-    else
-        omegastd_file = "cmip5.omegastd.rcp85.ensmean.forcing.new.bin"
-    end
-    global omegastdclim .= read_grads_binary(joinpath(input_dir, omegastd_file), 96, 48, 730)
-    println("✓")
-    
-    print("  • Wind speed... ")
-    if dataset == :era
-        ws_file = "erainterim.windspeed.850hpa.clim.bin"
-    else
-        ws_file = "ncep.zonal_wind.850hpa.clim.bin"  # Fallback to zonal wind
-    end
-    if isfile(joinpath(input_dir, ws_file))
-        global wsclim .= read_grads_binary(joinpath(input_dir, ws_file), 96, 48, 730)
-    else
-        # Compute from u and v
-        global wsclim .= sqrt.(uclim.^2 .+ vclim.^2)
-    end
-    println("✓")
-    
-    # ─── Flux corrections & solar ────────────────────────────────────
-    println("\n[4/4] Loading flux corrections and solar radiation...")
-    
-    print("  • Surface temperature flux correction... ")
-    global TF_correct .= read_grads_binary(joinpath(input_dir, "Tsurf_flux_correction.bin"), 96, 48, 730)
-    println("✓")
-    
-    print("  • Water vapor flux correction... ")
-    global qF_correct .= read_grads_binary(joinpath(input_dir, "vapour_flux_correction.bin"), 96, 48, 730)
-    println("✓")
-    
-    print("  • Deep ocean flux correction... ")
-    global ToF_correct .= read_grads_binary(joinpath(input_dir, "Tocean_flux_correction.bin"), 96, 48, 730)
-    println("✓")
-    
-    print("  • Solar radiation (48×730)... ")
-    global sw_solar .= read_grads_binary(joinpath(input_dir, "solar_radiation.clim.bin"), 1, 48, 730)
-    println("✓")
-    
-    println("\n═══════════════════════════════════════════════════════════")
-    println("  ✓ All climate data loaded successfully!")
-    println("═══════════════════════════════════════════════════════════\n")
-    
-    return nothing
-end
-
-# ╔═╡ 4995d3d8-1f95-41d8-be6c-50663edbce10
-begin
-	# Path to input data directory (adjust if needed)
-	input_data_dir = joinpath(@__DIR__, "greb-official-official", "greb-official-official", "input")
-	
-	# Alternative: use absolute path if the above doesn't work
-	# input_data_dir = raw"c:\Users\ThoSt\OneDrive - UGent\Documents\Project\ClimaModel\greb-official-official\greb-official-official\input"
-	
-	# Load the data (choose dataset: :ncep, :era, or :era_ncep)
-	load_greb_input_data!(input_data_dir, dataset=:ncep)
-end
-
-# ╔═╡ 1df2b91b-be14-427a-87b3-95cdef26ce00
-function SWradiation!(Ts1, timestate::TimeState, log_exp::Int, 											  ws::CirculationWorkspace)
-	# ── Atmospheric albedo from cloud climatology ──────────────
-	cld = @view cldclim[:, :, timestate.ityr]
-	a_atmos = @. cld * a_cloud
-
-	# ── Surface albedo ─────────────────────────────────────────
-	a_surf = ws.a_surf_buf
-
-	# Land: albedo = f(Ts) with ice thresholds Tl_ice1 / Tl_ice2
-	# Use static scheduling for deterministic results
-	Threads.@threads :static for j in 1:ydim
-		for i in 1:xdim
-			if z_topo[i,j] >= 0.0                         # land
-				if Ts1[i,j] <= Tl_ice1
-					a_surf[i,j] = a_no_ice + da_ice             # full ice
-				elseif Ts1[i,j] >= Tl_ice2
-					a_surf[i,j] = a_no_ice                      # ice-free
-				else
-					a_surf[i,j] = a_no_ice + da_ice * (1.0 - (Ts1[i,j] - Tl_ice1) / (Tl_ice2 - Tl_ice1))
-				end
-			else                                              # ocean
-				if Ts1[i,j] <= To_ice1
-					a_surf[i,j] = a_no_ice + da_ice             # full ice
-				elseif Ts1[i,j] >= To_ice2
-					a_surf[i,j] = a_no_ice                      # ice-free
-				else
-					a_surf[i,j] = a_no_ice + da_ice * (1.0 - (Ts1[i,j] - To_ice1) / (To_ice2 - To_ice1))
-				end
-			end
-		end
-	end
-
-	# Glacier cells always get full ice albedo
-	@. a_surf = ifelse(glacier > 0.5, a_no_ice + da_ice, a_surf)
-
-	# Sensitivity experiments: no ice-albedo feedback
-	if log_exp <= 5
-		a_surf .= a_no_ice
-	end
-
-	# ── Combined albedo & SW flux ──────────────────────────────
-	albedo = @. a_surf + a_atmos - a_surf * a_atmos
-
-	global temp_2d_4
-	sw = temp_2d_4
-	@simd for i in 1:xdim
-		# Apply solar forcing for experiments (e.g., 27-28: solar constant changes)
-		solar_flux = sw_solar[:, timestate.ityr]
-		solar_flux = solar_flux .* sw_solar_forcing_state[]
-		@views sw[i, :] .= solar_flux .* (1.0 .- albedo[i, :])
-	end
-
-	return (SW = sw, albedo = albedo)
-end
-
-# ╔═╡ 2bab06b9-ca98-4142-99cb-d2ad4f1cde93
-function advection!(T1::Matrix{Float64}, h_scl::Float64, ws::CirculationWorkspace, timestate::TimeState)::Matrix{Float64}
-	# Use workspace buffers
-	dX_advec = ws.dX_adv
-	fill!(dX_advec, 0.0)  # Clear workspace
-
-	# Sensitivity experiment 8: no vapour advection
-	(log_exp == 8 && h_scl == z_vapor) && return dX_advec
-
-	# ── Precomputed geometry/coefficients ───────────────────
-	dxlat = dxlat_grid
-	ccy   = ccy_adv
-	ccx   = ccx_adv
-	# Use cached weight arrays
-	wz = if h_scl == z_air
-		wz_air
-	elseif h_scl == z_vapor
-		wz_vapor
-	else
-		get!(WZ_CACHE, h_scl) do
-			@. exp(-z_topo / h_scl)
-		end
-	end
-
-	dTx = ws.dTx
-	dTy = ws.dTy
-	fill!(dTx, 0.0)
-	fill!(dTy, 0.0)
-
-	@inbounds for k in 1:ydim
-		# ── Meridional (v) advection ───────────────────────
-		@inbounds for j in 1:xdim
-			v = vclim[j, k, timestate.ityr]
-			if v >= 0.0
-				if k >= 3
-					dTy[j,k] = -v * ccy * (wz[j,k-1] * (T1[j,k] - T1[j,k-1]) +
-					                        wz[j,k-2] * (T1[j,k] - T1[j,k-2])) / 3.0
-				elseif k == 2
-					dTy[j,k] = -v * ccy * wz[j,k-1] * (T1[j,k] - T1[j,k-1])
-				else  # k == 1
-					dTy[j,k] = 0.0
-				end
-			else
-				if k <= ydim - 2
-					dTy[j,k] = v * ccy * (wz[j,k+1] * (T1[j,k] - T1[j,k+1]) +
-					                       wz[j,k+2] * (T1[j,k] - T1[j,k+2])) / 3.0
-				elseif k == ydim - 1
-					dTy[j,k] = v * ccy * wz[j,k+1] * (-T1[j,k] + T1[j,k+1])
-				else  # k == ydim
-					dTy[j,k] = 0.0
-				end
-			end
-		end
-
-		# ── Zonal (u) advection ───────────────────────────
-		if dxlat[k] > 2.5e5   # moderate latitudes
-			@inbounds for j in 1:xdim
-				jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
-				jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
-
-				u = uclim[j, k, timestate.ityr]
-				if u >= 0.0
-					dTx[j,k] = -u * ccx[k] * (wz[jm1,k] * (T1[j,k] - T1[jm1,k]) +
-					                          wz[jm2,k] * (T1[j,k] - T1[jm2,k])) / 3.0
-				else
-					dTx[j,k] =  u * ccx[k] * (wz[jp1,k] * (T1[j,k] - T1[jp1,k]) +
-					                          wz[jp2,k] * (T1[j,k] - T1[jp2,k])) / 3.0
-				end
-			end
-		else  # near-polar: sub-time-stepping
-			dd     = max(1, round(Int, Δt_crcl / (dxlat[k] / 10.0)))
-			dtdff2 = Δt_crcl / dd
-			time2  = max(1, round(Int, Δt_crcl / dtdff2))
-			ccx2   = dtdff2 / dxlat[k] / 2.0
-
-			# Use workspace buffers (no allocation)
-			copyto!(ws.T1h_buf, view(T1, :, k))
-			fill!(ws.dTxh_buf, 0.0)
-
-			for _tt2 in 1:time2
-				for j in 1:xdim
-					jm1 = lon_jm1[j]; jp1 = lon_jp1[j]
-					jm2 = lon_jm2[j]; jp2 = lon_jp2[j]
-					jm3 = lon_jm3[j]; jp3 = lon_jp3[j]
-
-					u = uclim[j, k, timestate.ityr]
-					if u >= 0.0
-						ws.dTxh_buf[j] = -u * ccx2 * (
-							10 * wz[jm1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jm1]) +
-							 4 * wz[jm2,k] * (ws.T1h_buf[jm1] - ws.T1h_buf[jm2]) +
-							 1 * wz[jm3,k] * (ws.T1h_buf[jm2] - ws.T1h_buf[jm3])
-						) / 20.0
-					else
-						ws.dTxh_buf[j] =  u * ccx2 * (
-							10 * wz[jp1,k] * (ws.T1h_buf[j] - ws.T1h_buf[jp1]) +
-							 4 * wz[jp2,k] * (ws.T1h_buf[jp1] - ws.T1h_buf[jp2]) +
-							 1 * wz[jp3,k] * (ws.T1h_buf[jp2] - ws.T1h_buf[jp3])
-						) / 20.0
-					end
-				end
-				# Stability clamp
-				@. ws.dTxh_buf = ifelse(ws.dTxh_buf <= -ws.T1h_buf, -0.9 * ws.T1h_buf, ws.dTxh_buf)
-				ws.T1h_buf .+= ws.dTxh_buf
-			end
-			dTx[:, k] .= ws.T1h_buf .- T1[:, k]
-		end
-	end
-
-	@. dX_advec = dTx + dTy
-	return dX_advec
-end
-
 # ╔═╡ d404043f-8080-4262-9ab6-d9bb13eee504
-function init_model!(log_exp)
+function init_model!(log_exp, cfg::PhysicsConfig)
+
 	# ── MSCM Hydrology Parameter Initialization ────────────
-	set_hydrology_parameters!()
+	set_hydrology_parameters!(cfg)
 	
 	# ── dTrad: offset between Tatmos and radiation temperature ────
 	@. dTrad = -0.16 * Tclim - 5.0
@@ -2053,26 +2587,26 @@ function init_model!(log_exp)
 	end
 
 	# Apply cloud deconstruction switch
-	if !log_clouds_dmc
+	if !cfg.log_clouds_dmc
 		cldclim .= 0.0  # zero cloud climatology
 	end
 	
 	# Apply flux correction conditional zeroing (MSCM feature)
-	if log_exp == 1 && !log_qflux_dmc
+	if log_exp == 1 && !cfg.log_qflux_dmc
 		TF_correct .= 0.0
 		qF_correct .= 0.0
 		ToF_correct .= 0.0
+	end
+
+	if !cfg.log_hydro_dmc
+		qclim .= 0.0  # zero out humidity climatology
 	end
 	
 	if log_exp <= 3
 		qclim .= 0.0052                    # constant water vapor
 	end
 	
-	if log_exp <= 9
-		mldclim .= d_ocean                 # no deep ocean
-	end
-	
-	if log_exp == 11
+	if log_exp <= 9 || log_exp == 11
 		mldclim .= d_ocean                 # no deep ocean
 	end
 
@@ -2107,7 +2641,7 @@ function init_model!(log_exp)
 			cap_surf[i, j] = cap_land
 		else
 			# Apply ocean deconstruction switch (MSCM feature)
-			if log_ocean_dmc
+			if cfg.log_ocean_dmc
 				cap_surf[i, j] = cap_ocean * mldclim[i, j, 1]  # normal ocean
 			else
 				cap_surf[i, j] = cap_land  
@@ -2123,13 +2657,13 @@ function init_model!(log_exp)
 
 	# ── Control CO₂ level ───────────────────────────────────────
 	CO2_ctrl = 340.0
-	if !log_co2_dmc
+	if !cfg.log_co2_dmc
 		CO2_ctrl = 0.0  # Zero CO2 for deconstruction experiments
 	end
 	if log_exp == 12 || log_exp == 13
 		CO2_ctrl = 298.0                             # A1B scenario
 	end
-	if 95 <= log_exp <= 100
+	if 95 <= log_exp && log_exp <= 100
 		CO2_ctrl = 280.0  # IPCC scenarios baseline
 	end
 
@@ -2137,332 +2671,17 @@ function init_model!(log_exp)
 	        q_ini  = q_ini,  CO2_ctrl = CO2_ctrl)
 end
 
-# ╔═╡ c0c40037-4169-4d38-bebe-2086cebc24f2
-function LWradiation!(Ts1, Ta1, q1, CO2, timestate::TimeState, log_exp::Int, 							  ws::CirculationWorkspace)
-	# ── Effective column amounts (pressure-scaled) ─────────────
-	e_co2   = zeros(Float64, xdim, ydim)       # CO₂ (spatial)
-	e_vapor = @. wz_air * r_qviwv * q1         # water vapour
-	e_cloud = @view cldclim[:, :, timestate.ityr]        # clouds
-
-	# Apply spatial CO₂ masking for regional experiments
-	# Spatial threading (grid-independent)
-	Threads.@threads :static for j in 1:ydim
-		for i in 1:xdim
-			e_co2[i, j] = wz_air[i, j] * CO2 * co2_part[i, j]
-		end
-	end
-
-	# Process control switches: water vapor feedback
-	if !log_vapor_dmc || !log_vapor_drsp
-		# Use climatological water vapor instead of model-computed q1
-		qc = @view qclim[:, :, timestate.ityr] 
-		e_vapor = @. wz_air * r_qviwv * qc
-	end
-	
-	# Sensitivity experiment 11: use climatological vapour
-	if log_exp == 11
-		qc = @view qclim[:, :, timestate.ityr]
-		e_vapor = @. wz_air * r_qviwv * qc
-	end
-
-	# ── Emissivity (log-regression with 10 parameters) ─────────
-	em = @. p_emi[4] * log(p_emi[1] * e_co2 + p_emi[2] * e_vapor + p_emi[3]) +
-		    p_emi[7] +
-		    p_emi[5] * log(p_emi[1] * e_co2   + p_emi[3]) +
-		    p_emi[6] * log(p_emi[2] * e_vapor + p_emi[3])
-
-	# Cloud adjustment (in-place)
-	@. em = (p_emi[8] - e_cloud) / p_emi[9] * (em - p_emi[10]) + p_emi[10]
-
-	# Sensitivity experiment 11: linear vapour correction
-	if log_exp == 11
-		qc = @view qclim[:, :, timestate.ityr]
-		@. em += 0.022 / (0.15 * 24.0) * r_qviwv * (q1 - qc)
-	end
-
-	# ── Fluxes ──────────────────────────────────────────────────
-	LW_surf    = @. -σ * Ts1^4
-	dTr        = @view dTrad[:, :, timestate.ityr]
-	LWair_down = @. -em * σ * (Ta1 + dTr)^4
-	LWair_up   = LWair_down
-
-	# Mean-state atmosphere deconstruction parity with Fortran
-	if !log_atmos_dmc
-		LWair_down .= 0.0
-	end
-
-	return (LW_surf = LW_surf, LWair_up = LWair_up, LWair_down = LWair_down, em = em)
-end
-
-# ╔═╡ 606032a2-b2ca-4fd8-9930-afd83aecec7a
-function hydro!(Ts1, q1, timestate::TimeState, ws::CirculationWorkspace=circ_workspace)
-	# Use pre-allocated zero buffers 
-	fill!(ws.zero_buf1, 0.0)
-	fill!(ws.zero_buf2, 0.0)
-	fill!(ws.zero_buf3, 0.0)
-	fill!(ws.zero_buf4, 0.0)
-
-	# Process control switches
-	!log_atmos_dmc && return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
-	!log_hydro_drsp && return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
-	
-	# Sensitivity experiments with no hydrological feedback
-	if log_exp <= 6 || log_exp == 13 || log_exp == 15
-		return (Q_lat = ws.zero_buf1, Q_lat_air = ws.zero_buf2, dq_eva = ws.zero_buf3, dq_rain = ws.zero_buf4)
-	end
-
-	# ── Get climatology fields ──────────────────────────
-	u = @view uclim[:, :, timestate.ityr]
-	v = @view vclim[:, :, timestate.ityr]
-	qclim_curr = @view qclim[:, :, timestate.ityr]
-	swet = @view swetclim[:, :, timestate.ityr]
-	omega = @view omegaclim[:, :, timestate.ityr]
-	omegastd = @view omegastdclim[:, :, timestate.ityr]
-
-	# ── Absolute wind speed (climatology + gustiness) ───────────
-	abswind = @. sqrt(u^2 + v^2)
-	@. abswind = ifelse(z_topo > 0.0,
-		sqrt(abswind^2 + 2.0^2),                  # land gustiness
-		sqrt(abswind^2 + 3.0^2))                  # ocean gustiness
-
-	# ── Saturated humidity (Clausius–Clapeyron + topo-pressure) ─
-	qs = @. 3.75e-3 * exp(17.08085 * (Ts1 - 273.15) / (Ts1 - 273.15 + 234.175)) *
-		wz_air
-
-	# ── MSCM Enhanced Evaporation Modes ──────────────────────────
-	if log_eva == -1  # Original GREB model
-		# Standard Penman-Monteith formulation with gustiness
-		gustiness = @. (z_topo > 0.5) ? 3.0 : 10.0  # land=3, ocean=10 m/s
-		wind_eff = @. sqrt(uclim[:,:,timestate.ityr]^2 + vclim[:,:,timestate.ityr]^2 + gustiness^2)
-		
-		# Original GREB coefficients: land and ocean
-		cE = @. (z_topo > 0.5) ? 0.65e-3 : 1.15e-3
-		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
-		
-	elseif log_eva == 0  # Skin temperature version (MSCM Mode 0)
-		# Enhanced with skin temperature offset and wsclim integration
-		Tskin_offset = @. (z_topo > 0.5) ? 5.0 : 1.0  # Land +5K, Ocean +1K   
-		Tskin = @. max(Ts1 + Tskin_offset, 200.0)  # Prevent unrealistic temps
-		
-		# Recalculate saturation with skin temperature
-		qs_skin = @. 3.75e-3 * exp(17.08085 * (Tskin - 273.15) / (Tskin - 273.15 + 234.175)) * wz_air
-		
-		# Use wsclim if available, otherwise computed wind
-		if sum(abs.(wsclim[:,:,timestate.ityr])) > 1e-10  # Check if real data
-			ws_base = wsclim[:,:,timestate.ityr]
-		else
-			ws_base = @. sqrt(uclim[:,:,timestate.ityr]^2 + vclim[:,:,timestate.ityr]^2)
-		end
-		gustiness_land = 11.5  # Fortran: sqrt(wsclim^2 + 11.5^2)
-		gustiness_ocean = 5.4  # Fortran: sqrt(wsclim^2 + 5.4^2)
-		wind_eff = @. (z_topo > 0.5) ? sqrt(ws_base^2 + gustiness_land^2) : sqrt(ws_base^2 + gustiness_ocean^2)
-
-		
-		# Mode 0 coefficients (from MSCM tuning)
-		cE_land = 0.25 * ce  
-		cE_ocean = 0.58 * ce 
-		cE = @. (z_topo > 0.5) ? cE_land : cE_ocean 
-		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs_skin - q1) * swet
-		
-	elseif log_eva == 1  # Enhanced land/ocean coefficients (MSCM Mode 1)
-		# Improved parameterization with different land/ocean physics
-		gustiness_land = 144.0   
-		gustiness_ocean = 7.1    
-		wind_eff = @. (z_topo > 0.5) ? sqrt(u^2 + v^2 + gustiness_land^2) : sqrt(u^2 + v^2 + gustiness_ocean^2)
-		
-		# Enhanced coefficients from MSCM calibration
-		cE_land = 0.04 * ce   
-		cE_ocean = 0.73 * ce  
-		cE = @. (z_topo > 0.5) ? cE_land : cE_ocean
-		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
-		
-	elseif log_eva == 2  # Wind climatology version (MSCM Mode 2) 
-		# Always uses wsclim instead of computed wind components
-		if sum(abs.(wsclim[:,:,timestate.ityr])) < 1e-10
-			@warn "Mode 2 requires wsclim data. Falling back to computed wind."
-			ws_base = @. sqrt(uclim[:,:,timestate.ityr]^2 + vclim[:,:,timestate.ityr]^2)
-		else
-			ws_base = wsclim[:,:,timestate.ityr]  # Use wind speed climatology
-		end
-		
-		# gustiness values: land=9.0, ocean=4.0
-		gustiness_land = 9.0    
-		gustiness_ocean = 4.0    
-		wind_eff = @. (z_topo > 0.5) ? sqrt(ws_base^2 + gustiness_land^2) : sqrt(ws_base^2 + gustiness_ocean^2)
-		
-		# Mode 2 coefficients (wsclim-optimized)
-		cE_land = 0.56 * ce   
-		cE_ocean = 0.79 * ce  
-		cE = @. (z_topo > 0.5) ? cE_land : cE_ocean 
-		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
-	else
-		@warn "Unknown log_eva mode: $log_eva. Using original GREB."
-		# Fallback to original GREB
-		gustiness = @. (z_topo > 0.5) ? 3.0 : 10.0
-		wind_eff = @. sqrt(uclim[:,:,timestate.ityr]^2 + vclim[:,:,timestate.ityr]^2 + gustiness^2)
-		cE = @. (z_topo > 0.5) ? 0.65e-3 : 1.15e-3
-		Q_lat = @. cE * wind_eff * ρ_air * cq_latent * (qs - q1) * swet
-	end
-
-	# ── MSCM Enhanced Precipitation System ────────────────────────
-	if log_rain != -1 && (c_q != 0.0 || c_rq != 0.0 || c_omega != 0.0 || c_omegastd != 0.0)
-		# Calculate relative humidity with bounds checking 
-		rq = @. min(max(q1 / max(qs, 1e-12), 0.0), 1.5)  # Prevent division by zero
-		
-		# Get omega fields with proper scaling (Eq. 18 Stassen et al 2019)
-		omega_scaled = @. omegaclim[:,:,timestate.ityr] * Δt_crcl / z_vapor * 0.001  # Pa/s → kg/kg
-		omegastd_scaled = @. omegastdclim[:,:,timestate.ityr] * Δt_crcl / z_vapor * 0.001
-		
-		# MSCM precipitation formula (mode-dependent terms)
-		# Base moisture term (scalar * array)
-		base_precip = c_q * q1
-
-		# RH feedback with conditional broadcasting
-		rh_term = c_rq != 0.0 ? @.(c_rq * rq * q1) : zeros(size(q1))
-
-		# Vertical velocity term
-		omega_term = c_omega != 0.0 ? @.(c_omega * omega_scaled) : zeros(size(q1))
-
-		# Omega variability term
-		omegastd_term = c_omegastd != 0.0 ? @.(c_omegastd * omegastd_scaled) : zeros(size(q1))
-		
-		# Combine all terms with precipitation efficiency
-		dq_rain = @. (base_precip + rh_term + omega_term + omegastd_term) * cq_rain
-
-		# Add precipitation limiting for log_rain == 1
-		if log_rain == 1
-			limit_value = -0.0015 ./ (wz_vapor .* r_qviwv .* 86400.0)
-			dq_rain = @. max(dq_rain, limit_value)  # Avoid negative rainfall  
-		end
-		
-	else
-		# Original GREB precipitation (log_rain == -1)
-		dq_rain = @. cq_rain * q1
-	end
-
-	# ── Water-vapour tendencies ─────────────────────────────
-	dq_eva  = @. -Q_lat / cq_latent / r_qviwv        # evaporation
-	
-	# Clamp precipitation to avoid negative humidity
-	dq_rain = @. max(dq_rain, -0.9 * q1 / Δt)
-
-	# ── Atmospheric latent heat ────────────────────────────
-	Q_lat_air = @. -dq_rain * cq_latent * r_qviwv
-
-	return (Q_lat = Q_lat, Q_lat_air = Q_lat_air, dq_eva = dq_eva, dq_rain = dq_rain)
-end;
-
-# ╔═╡ 9bff59c5-4631-4091-8230-989a835788e5
-function seaice!(Ts0, timestate::TimeState)
-	mld = @view mldclim[:, :, timestate.ityr]
-
-	for j in 1:ydim, i in 1:xdim
-		z_topo[i,j] >= 0.0 && continue          # skip land
-		if Ts0[i,j] <= To_ice1
-			cap_surf[i,j] = cap_land                             # full sea ice
-		elseif Ts0[i,j] >= To_ice2
-			cap_surf[i,j] = cap_ocean * mld[i,j]                 # open ocean
-		else
-			cap_surf[i,j] = cap_land + (cap_ocean * mld[i,j] - cap_land) /
-				(To_ice2 - To_ice1) * (Ts0[i,j] - To_ice1)       # partial ice
-		end
-	end
-
-	# Process control switches
-	if !log_ice_dmc || !log_ice_drsp
-		# No ice feedback: use simple land/ocean distinction
-		for j in 1:ydim, i in 1:xdim
-			if z_topo[i,j] >= 0.0
-				cap_surf[i,j] = cap_land
-			else
-				cap_surf[i,j] = cap_ocean * mld[i,j]
-			end
-		end
-		return
-	end
-
-	# Sensitivity experiments: no ice feedback
-	if log_exp <= 5
-		for j in 1:ydim, i in 1:xdim
-			if z_topo[i,j] >= 0.0
-				cap_surf[i,j] = cap_land
-			else
-				cap_surf[i,j] = cap_ocean * mld[i,j]
-			end
-		end
-	end
-
-	# Glacier cells always land-ice capacity
-	@. cap_surf = ifelse(glacier > 0.5, cap_land, cap_surf)
-
-	return nothing
-end
-
-# ╔═╡ 625089e2-ef77-4821-a6d6-d0a0f88207f2
-function deep_ocean!(Ts1, To1, timestate::TimeState, ws::CirculationWorkspace=circ_workspace)
-	# Use pre-allocated zero buffers 
-	fill!(ws.zero_buf1, 0.0)
-	fill!(ws.zero_buf2, 0.0)
-	dT_ocean = ws.zero_buf1
-	dTo = ws.zero_buf2
-	
-	# Process control switches
-	!log_deepocean_dmc && return (dT_ocean = dT_ocean, dTo = dTo)
-	!log_deepocean_drsp && return (dT_ocean = dT_ocean, dTo = dTo)
-
-	# Sensitivity experiments with no deep-ocean coupling
-	if log_exp <= 9 || log_exp == 11
-		return (dT_ocean = dT_ocean, dTo = dTo)
-	end
-	if 14 <= log_exp <= 16
-		return (dT_ocean = dT_ocean, dTo = dTo)
-	end
-
-	# ── Change in mixed-layer depth ─────────────────────────
-	mld_now  = @view mldclim[:, :, timestate.ityr]
-	mld_prev = timestate.ityr > 1 ? (@view mldclim[:, :, timestate.ityr - 1]) : (@view mldclim[:, :, nstep_yr])
-	dmld = @. mld_now - mld_prev
-
-	# ── Entrainment & detrainment ─────────────────────────
-	# Thread over grid points (independent)
-	Threads.@threads :static for j in 1:ydim
-		for i in 1:xdim
-			z_topo[i,j] >= 0.0 && continue                   # skip land
-			Ts1[i,j] < To_ice2 && continue                   # skip ice-covered
-			if dmld[i,j] < 0.0
-				# Entrainment: mixed layer shallows → deep ocean warms
-				dTo[i,j] = -dmld[i,j] / (z_ocean[i,j] - mldclim[i,j,timestate.ityr]) * (Ts1[i,j] - To1[i,j])
-			elseif dmld[i,j] > 0.0
-				# Detrainment: mixed layer deepens → surface cools
-				dT_ocean[i,j] = dmld[i,j] / mldclim[i,j,timestate.ityr] * (To1[i,j] - Ts1[i,j])
-			end
-		end
-	end
-
-	# Efficiency factor
-	c_effmix = 0.5
-	dTo      .*= c_effmix
-	dT_ocean .*= c_effmix
-
-	# ── Turbulent mixing ─────────────────────────────────
-	Tx = @. max(To_ice2, Ts1)
-	@. dTo     += Δt * co_turb * (Tx - To1) / (cap_ocean * (z_ocean - mld_now))
-	@. dT_ocean += Δt * co_turb * (To1 - Tx) / (cap_ocean * mld_now)
-
-	return (dT_ocean = dT_ocean, dTo = dTo)
-end
-
 # ╔═╡ db75ea52-9387-4c15-bde5-61777ac9b570
 begin
-	function circulation!(X_in, h_scl, ws::CirculationWorkspace, timestate::TimeState)
+	function circulation!(X_in, h_scl, ws::CirculationWorkspace, timestate::TimeState, log_exp::Int, cfg::PhysicsConfig)
 		# Use pre-allocated workspace buffer
 		dX_crcl = ws.dX_crcl
 		fill!(dX_crcl, 0.0)
 
 		# Process control switches
-		!log_atmos_dmc && return dX_crcl  
-		!log_crcl_dmc && return dX_crcl
-		!log_crcl_drsp && return dX_crcl
+		!cfg.log_atmos_dmc && return dX_crcl  
+		!cfg.log_crcl_dmc && return dX_crcl
+		!cfg.log_crcl_drsp && return dX_crcl
 
 		# Sensitivity experiments: no circulation
 		log_exp <= 4 && return dX_crcl
@@ -2474,27 +2693,29 @@ begin
 
 		X1 = copy(X_in)
 		for _tt in 1:ntime
-			# Initialize tendency arrays
-			dx_diff = zeros(Float64, xdim, ydim)
-			dx_adv = zeros(Float64, xdim, ydim)  
-			dx_conv = zeros(Float64, xdim, ydim)
+    		fill!(ws.dX_diff, 0.0)
+    		fill!(ws.dX_adv, 0.0)
+    		fill!(ws.zero_buf1, 0.0)
+    		dx_diff = ws.dX_diff
+    		dx_adv = ws.dX_adv
+    		dx_conv = ws.zero_buf1
 			
 			# Process-specific switches (pass workspace to diffusion!/advection!)
-			if log_vdif && h_scl == z_vapor
+			if cfg.log_vdif && h_scl == z_vapor
 				dx_diff = diffusion!(X1, h_scl, ws, timestate)
 			end
-			if log_vadv && h_scl == z_vapor
-				dx_adv = advection!(X1, h_scl, ws, timestate)
+			if cfg.log_vadv && h_scl == z_vapor
+				dx_adv = advection!(X1, h_scl, ws, timestate, log_exp)
 			end
 			# CONVERGENCE INTEGRATION (log_conv == 0 enables convergence)
-			if !log_conv && h_scl == z_vapor
+			if !cfg.log_conv && h_scl == z_vapor
 				dx_conv = convergence!(X1, omegaclim, timestate.ityr)
 			end
-			if log_hdif && h_scl == z_air
+			if cfg.log_hdif && h_scl == z_air
 				dx_diff = diffusion!(X1, h_scl, ws, timestate)
 			end
-			if log_hadv && h_scl == z_air
-				dx_adv = advection!(X1, h_scl, ws, timestate)
+			if cfg.log_hadv && h_scl == z_air
+				dx_adv = advection!(X1, h_scl, ws, timestate, log_exp)
 			end
 			
 			# Update field with all tendencies
@@ -2507,49 +2728,58 @@ begin
 end
 
 # ╔═╡ e493fae7-239a-494c-9a59-728446d70f7a
-function tendencies!(CO2, Ts1, Ta1, To1, q1, ws::CirculationWorkspace, 									 timestate::TimeState, log_exp::Int)
-		# Short-wave radiation → albedo, SW flux
-		sw_out   = SWradiation!(Ts1, timestate, log_exp, ws)
-		# Long-wave radiation → LW_surf, LWair_up, LWair_down, emissivity
-		lw_out   = LWradiation!(Ts1, Ta1, q1, CO2, timestate, log_exp, ws)
-		# Sensible heat flux (Fortran: Q_sens = ct_sens*(Ta1-Ts1))
-		Q_sens   = @. ct_sens * (Ta1 - Ts1)
-		if !log_atmos_dmc
-			Q_sens .= 0.0
-		end
-		# Hydrological cycle → latent heat + evaporation/rain tendencies
-		hy_out   = hydro!(Ts1, q1, timestate, ws)
-		# Atmospheric circulation — temperature diffusion/advection (pass workspace)
-		dTa_crcl = circulation!(Ta1, z_air, ws, timestate)
-		# Atmospheric circulation — water-vapour diffusion/advection (pass workspace)
-		dq_crcl  = circulation!(q1, z_vapor, ws, timestate)
-		# Deep ocean coupling
-		do_out   = deep_ocean!(Ts1, To1, timestate, ws)
+function tendencies!(CO2, Ts1, Ta1, To1, q1, ws::CirculationWorkspace,
+					 timestate::TimeState, log_exp::Int, cfg::PhysicsConfig)
+	
+	# Short-wave radiation → albedo, SW flux
+	sw_out   = SWradiation!(Ts1, timestate, log_exp, cfg, ws)
+	
+	# Long-wave radiation → LW_surf, LWair_up, LWair_down, emissivity
+	lw_out   = LWradiation!(Ts1, Ta1, q1, CO2, timestate, log_exp, cfg, ws)
+	
+	# Sensible heat flux
+	Q_sens   = @. ct_sens * (Ta1 - Ts1)
+	if !cfg.log_atmos_dmc
+		Q_sens .= 0.0
+	end
+	
+	# Hydrological cycle → latent heat + evaporation/rain tendencies
+	hy_out   = hydro!(Ts1, q1, timestate, log_exp, cfg, ws)
+	
+	# Atmospheric circulation — temperature diffusion/advection (pass workspace)
+	dTa_crcl = circulation!(Ta1, z_air, ws, timestate, log_exp, cfg)
+	
+	# Atmospheric circulation — water-vapour diffusion/advection (pass workspace)
+	dq_crcl  = circulation!(q1, z_vapor, ws, timestate, log_exp, cfg)
+	
+	# Deep ocean coupling
+	do_out   = deep_ocean!(Ts1, To1, timestate, log_exp, cfg, ws)
 
 		return (albedo     = sw_out.albedo,
-		        SW         = sw_out.SW,
-		        LW_surf    = lw_out.LW_surf,
-		        Q_lat      = hy_out.Q_lat,
-		        Q_sens     = Q_sens,
-		        Q_lat_air  = hy_out.Q_lat_air,
-		        dq_eva     = hy_out.dq_eva,
-		        dq_rain    = hy_out.dq_rain,
-		        dq_crcl    = dq_crcl,
-		        dTa_crcl   = dTa_crcl,
-		        dT_ocean   = do_out.dT_ocean,
-		        dTo        = do_out.dTo,
-		        LWair_down = lw_out.LWair_down,
-		        LWair_up   = lw_out.LWair_up,
-		        em         = lw_out.em)
+	        SW         = sw_out.SW,
+	        LW_surf    = lw_out.LW_surf,
+	        Q_lat      = hy_out.Q_lat,
+	        Q_sens     = Q_sens,
+	        Q_lat_air  = hy_out.Q_lat_air,
+	        dq_eva     = hy_out.dq_eva,
+	        dq_rain    = hy_out.dq_rain,
+	        dq_crcl    = dq_crcl,
+	        dTa_crcl   = dTa_crcl,
+	        dT_ocean   = do_out.dT_ocean,
+	        dTo        = do_out.dTo,
+	        LWair_down = lw_out.LWair_down,
+	        LWair_up   = lw_out.LWair_up,
+	        em         = lw_out.em)
 	end
 
 # ╔═╡ 33fa7b1f-938b-481c-bf25-eca8d7fb33a7
-function time_loop!(it::Int, year::Int, CO2::Float64, mon::Int, irec::Int, 
-                   Ts1::Matrix{Float64}, Ta1::Matrix{Float64}, 
-                   q1::Matrix{Float64}, To1::Matrix{Float64}, 
-                   output_buf::Vector{MonthlyRecord},
-                   ws::CirculationWorkspace, acc::MonthlyAccumulator,
-                   timestate::TimeState, log_exp::Int)
+function time_loop!(it::Int, year::Int, CO2::Float64, mon::Int, irec::Int,
+				   Ts1::Matrix{Float64}, Ta1::Matrix{Float64},
+				   q1::Matrix{Float64}, To1::Matrix{Float64},
+				   output_buf::Vector{MonthlyRecord},
+				   ws::CirculationWorkspace, acc::MonthlyAccumulator,
+				   timestate::TimeState, log_exp::Int, cfg::PhysicsConfig)
+	
 	# ── Calendar indices (use precomputed lookup) ───────────────
 	cal = it <= MAX_TIMESTEPS ? CALENDAR_LOOKUP[it] : (
 		day = mod((it - 1) ÷ ndt_days, ndays_yr) + 1,
@@ -2560,7 +2790,7 @@ function time_loop!(it::Int, year::Int, CO2::Float64, mon::Int, irec::Int,
 	timestate.ityr = cal.step
 
 	# ── Compute all tendencies (pass workspace) ─────────────────
-	tend = tendencies!(CO2, Ts1, Ta1, To1, q1, ws, timestate, log_exp)
+	tend = tendencies!(CO2, Ts1, Ta1, To1, q1, ws, timestate, log_exp, cfg)
 
 	# ── Surface temperature ─────────────────────────────────────
 	Ts0 = ws.Ts0_buf
@@ -2596,9 +2826,9 @@ function time_loop!(it::Int, year::Int, CO2::Float64, mon::Int, irec::Int,
 	# ── Apply process control switches to tendencies ────────────
 	fill!(ws.zero_buf2, 0.0)
 	fill!(ws.zero_buf3, 0.0)
-	dq_eva_final = log_hydro_dmc ? tend.dq_eva : ws.zero_buf2
-	dq_rain_final = log_hydro_dmc ? tend.dq_rain : ws.zero_buf2
-	dq_crcl_final = log_crcl_dmc ? tend.dq_crcl : ws.zero_buf3
+	dq_eva_final = cfg.log_hydro_dmc ? tend.dq_eva : ws.zero_buf2
+	dq_rain_final = cfg.log_hydro_dmc ? tend.dq_rain : ws.zero_buf2
+	dq_crcl_final = cfg.log_crcl_dmc ? tend.dq_crcl : ws.zero_buf3
 	
 	# ── Humidity ────────────────────────────────────────────────
 	q0 = ws.q0_buf
@@ -2611,26 +2841,18 @@ function time_loop!(it::Int, year::Int, CO2::Float64, mon::Int, irec::Int,
 	@. q0 = q1 + dq
 
 	# ── Sea-ice heat capacity adjustment ─────────────────────────
-	seaice!(Ts0, timestate)
+	seaice!(Ts0, timestate, cfg)
 
 	# ── Compute ice fraction ─────────────────────────────────────
 	ice = ice_fraction_field(Ts0, ws)
 
-	# ── Output unit handling ───────────────────────────────────────
-	if FORTRAN_OUTPUT_PARITY
-		# Fortran parity units (kg/m²/s)
-		precip_out = @. dq_rain_final * wz_vapor * r_qviwv
-		evap_out = @. dq_eva_final * wz_vapor * r_qviwv
-		qcrcl_out = @. dq_crcl_final * wz_vapor * r_qviwv / Δt
-	else
-		# Analysis-friendly units (mm/day)
+	# Analysis-friendly units (mm/day)
 		# Precipitation: -dq_rain (negative tendency) → positive mm/day
 		# Evaporation: dq_eva (positive tendency) → positive mm/day
 		# Conversion: dq [kg/kg/timestep] × r_qviwv [kg/m³] × wz_vapor × 86400 [s/day]
-		precip_out = @. -dq_rain_final * wz_vapor * r_qviwv * 86400.0
-		evap_out = @. dq_eva_final * wz_vapor * r_qviwv * 86400.0
-		qcrcl_out = dq_crcl_final
-	end
+	precip_out = @. -dq_rain_final * wz_vapor * r_qviwv * 86400.0 
+	evap_out = @. dq_eva_final * wz_vapor * r_qviwv * 86400.0
+	qcrcl_out = @. dq_crcl_final
 
 	# ── Output + diagnostics ─────────────────────────────────────
 	res_out = output!(it, irec, mon, Ts0, Ta0, To0, q0, tend.albedo, 
@@ -2644,177 +2866,6 @@ function time_loop!(it::Int, year::Int, CO2::Float64, mon::Int, irec::Int,
 	        albedo = tend.albedo, mon = res_out.mon, irec = res_out.irec)
 end
 
-# ╔═╡ 1894ad94-cdf8-4e79-a0e5-b72088db31be
-function forcing(it, year, log_exp; nstep_yr=nstep_yr)
-	# Default CO₂ concentration
-	CO2 = 680.0
-	sw_solar_forcing = 1.0  # Solar forcing multiplier (ratio to reference)
-	
-	# 📜 Legacy experiments (preserve exact backward compatibility) ───────────
-	if log_exp == 1
-		CO2 = 550.0  # 550 ppm CO₂ steady state
-		# Flux correction conditional zeroing (MSCM feature)
-		if !log_qflux_dmc
-			# Note: TF_correct, qF_correct, ToF_correct would be zeroed
-			# This affects model initialization but arrays aren't accessible here
-		end
-	elseif log_exp == 12 || log_exp == 13
-		CO2_1950 = 310.0;  CO2_2000 = 370.0;  CO2_2050 = 520.0
-		if year <= 2000
-			CO2 = CO2_1950 + 60.0 / 50.0 * (year - 1950)
-		elseif year <= 2050
-			CO2 = CO2_2000 + 150.0 / 50.0 * (year - 2000)
-		elseif year <= 2100
-			CO2 = CO2_2050 + 180.0 / 50.0 * (year - 2050)
-		end
-	
-	# 💨 CO₂ scaling experiments ──────────────────────────────────────────────
-	elseif log_exp == 20
-		CO2 = 2 * 340.0  # 2×CO₂
-	elseif log_exp == 21  
-		CO2 = 4 * 340.0  # 4×CO₂
-	elseif log_exp == 22
-		CO2 = 10 * 340.0  # 10×CO₂ 
-	elseif log_exp == 23
-		CO2 = 0.5 * 340.0  # 0.5×CO₂
-	elseif log_exp == 24
-		CO2 = 0.0  # 0×CO₂ (no greenhouse effect)
-	
-	# ☀️ Solar forcing experiments ───────────────────────────────────────────
-	elseif log_exp == 27
-		CO2 = 340.0  # Baseline CO₂
-		sw_solar_forcing = (1365.0 + 27.0) / 1365.0  # +27 W/m² solar constant
-	elseif log_exp == 28
-		CO2 = 340.0  # Baseline CO₂
-		# 11-year solar cycle: ±1 W/m² amplitude
-		sw_solar_forcing = (1365.0 + 1.0 * sin(2π * year / 11.0)) / 1365.0
-	
-	# 📈 Enhanced A1B scenario ──────────────────────────────────────────────
-	elseif log_exp == 95
-		CO2_1950 = 310.0;  CO2_2000 = 370.0;  CO2_2050 = 520.0
-		if year <= 2000
-			CO2 = CO2_1950 + 60.0 / 50.0 * (year - 1950)
-		elseif year <= 2050
-			CO2 = CO2_2000 + 150.0 / 50.0 * (year - 2000)  
-		elseif year <= 2100
-			CO2 = CO2_2050 + 180.0 / 50.0 * (year - 2050)
-		end
-
-		# ── Time-varying CO₂ experiments ────────────
-	elseif log_exp == 25
-		# CO₂ sine wave (30-year period)
-		CO2 = 340.0 + 170.0 + 170.0 * cos(2π * (year - 13.0) / 30.0)
-	elseif log_exp == 26
-		# CO₂ step function: 2×CO₂ until 1980, then 1×CO₂
-		CO2 = year >= 1980 ? 340.0 : 2 * 340.0
-	
-	# ── Paleoclimate experiments ────────────────────   
-	elseif log_exp == 30
-		# Paleo: 231kyr BP solar + CO₂=200ppm
-		CO2 = 200.0
-	elseif log_exp == 31  
-		# Paleo: 231kyr BP solar + modern CO₂
-		CO2 = 340.0
-	elseif log_exp == 32
-		# Paleo: modern solar + CO₂=200ppm (231kyr BP)
-		CO2 = 200.0
-	
-	# ── Orbital forcing experiments ─────────────────
-	elseif log_exp == 35
-		# Solar obliquity changes
-		CO2 = 340.0  # Baseline CO₂
-	elseif log_exp == 36
-		# Solar eccentricity changes  
-		CO2 = 340.0  # Baseline CO₂
-	elseif log_exp == 37
-		# Solar constant as function of Earth-Sun distance
-		CO2 = 340.0  # Baseline CO₂
-	
-	# 📂 File I/O dependent experiments (placeholders) ───────────────────────
-	elseif 96 <= log_exp <= 99
-		# IPCC RCP scenarios - requires external CO₂ data files
-		error("Experiment $log_exp (RCP scenario) requires external data file. Not yet implemented.")
-	elseif log_exp == 100
-		# Custom CO₂ scenario - requires external trajectory file  
-		error("Experiment $log_exp (custom scenario) requires external data file. Not yet implemented.")
-	
-	# 🌍 Regional/partial CO₂ experiments ────────────────────────────────────
-	# Reset co2_part to full CO₂ first
-		co2_part .= 1.0
-		
-		if log_exp == 40
-			# 2×CO₂ Northern Hemisphere only
-			CO2 = 2 * 340.0
-			co2_part[:, 1:24] .= 0.5  # NH gets half the enhancement
-		elseif log_exp == 41
-			# 2×CO₂ Southern Hemisphere only  
-			CO2 = 2 * 340.0
-			co2_part[:, 25:48] .= 0.5  # SH gets half the enhancement
-		elseif log_exp == 42
-			# 2×CO₂ Tropics only
-			CO2 = 2 * 340.0
-			co2_part[:, 1:15] .= 0.5   # High NH latitudes: half CO₂
-			co2_part[:, 33:48] .= 0.5  # High SH latitudes: half CO₂
-			# Tropical boundaries get full CO₂ at some longitudes
-			for i in 4:4:96
-				co2_part[i, 33] = 1.0
-				co2_part[i, 15] = 1.0
-			end
-		elseif log_exp == 43
-			# 2×CO₂ Extratropics only
-			CO2 = 2 * 340.0
-			co2_part[:, 16:32] .= 0.5  # Tropics get half CO₂
-			# Tropical boundaries get full CO₂ at some longitudes
-			for i in 4:4:96
-				co2_part[i, 32] = 1.0
-				co2_part[i, 16] = 1.0
-			end
-		elseif log_exp == 44
-			# 2×CO₂ Ocean only
-			CO2 = 2 * 340.0
-			# Land and ice areas get half CO₂
-			for j in 1:ydim, i in 1:xdim
-				if z_topo[i, j] > 0.0  # Land points
-					co2_part[i, j] = 0.5
-				end
-				# Ice areas would also get 0.5 (requires ice fraction field)
-			end
-		elseif log_exp == 45
-			# 2×CO₂ Land/Ice only
-			CO2 = 2 * 340.0
-			# Ocean areas get half CO₂
-			for j in 1:ydim, i in 1:xdim
-				if z_topo[i, j] <= 0.0  # Ocean points
-					co2_part[i, j] = 0.5
-				end
-				# Ice areas would get full CO₂ (1.0)
-			end
-		elseif log_exp == 46
-			# 2×CO₂ Boreal Winter only (seasonal)
-			ityr_step = mod(it - 1, nstep_yr) + 1
-			if ityr_step <= 181 || ityr_step >= 547  # Winter months
-				CO2 = 2 * 340.0
-			else  # Summer months
-				CO2 = 340.0
-			end
-		elseif log_exp == 47
-			# 2×CO₂ Boreal Summer only (seasonal)
-			ityr_step = mod(it - 1, nstep_yr) + 1  
-			if ityr_step <= 181 || ityr_step >= 547  # Winter months
-				CO2 = 340.0
-			else  # Summer months
-				CO2 = 2 * 340.0
-			end
-		end
-	
-	# 📊 Forced boundary condition experiments (handled in scenario loop) ───── 
-	elseif log_exp == 230 || log_exp == 240 || log_exp == 241
-		CO2 = 340.0
-	end
-	
-	return (CO2 = CO2, sw_solar_forcing = sw_solar_forcing)
-end
-
 # ╔═╡ fee2639d-d8cf-4ee3-b824-73a0b02fef4a
 md"""
 ### Run Duration Configuration (years)
@@ -2824,7 +2875,8 @@ md"""
 @bind time_flux Slider(0:10, default=0, show_value=true)
 
 # ╔═╡ 584e767e-4dc5-4821-af63-d6a825326d9e
-function qflux_correction!(CO2_ctrl, Ts1, Ta1, q1, To1, log_exp::Int)
+function qflux_correction!(CO2_ctrl, Ts1, Ta1, q1, To1, log_exp::Int, cfg::PhysicsConfig)
+	
 	# Create workspace for circulation
 	ws = CirculationWorkspace()
 	# Create local time state
@@ -2836,7 +2888,7 @@ function qflux_correction!(CO2_ctrl, Ts1, Ta1, q1, To1, log_exp::Int)
 		timestate.ityr = mod(it - 1, nstep_yr) + 1
 		
 		# All physics tendencies (pass workspace)
-		tend = tendencies!(CO2_ctrl, Ts1, Ta1, To1, q1, ws, timestate, log_exp)
+		tend = tendencies!(CO2_ctrl, Ts1, Ta1, To1, q1, ws, timestate, log_exp, cfg)
 
 		# Views into climatology & correction fields (avoid copies)
 		Tc   = @view Tclim[:, :, timestate.ityr]
@@ -2880,7 +2932,7 @@ function qflux_correction!(CO2_ctrl, Ts1, Ta1, q1, To1, log_exp::Int)
 		q0 = @. q1 + dq + tend.dq_crcl + qFc
 
 		# Sea ice
-		seaice!(Ts0, timestate)
+		seaice!(Ts0, timestate, cfg)
 
 		# Diagnostics
 		diagnostics!(it, 0.0, CO2_ctrl, Ts0, Ta0, To0, q0, tend.albedo,
@@ -2894,9 +2946,10 @@ function qflux_correction!(CO2_ctrl, Ts1, Ta1, q1, To1, log_exp::Int)
 end
 
 # ╔═╡ 92c3bd68-bd07-4381-9c04-e6611650cd1e
-function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
+function greb_model!(log_exp, time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig)
+
 	# ── 1. Initialisation ───────────────────────────────────────
-	ini = init_model!(log_exp)
+	ini = init_model!(log_exp, cfg)
 	Ts_ini   = ini.Ts_ini
 	Ta_ini   = ini.Ta_ini
 	To_ini   = ini.To_ini
@@ -2908,8 +2961,17 @@ function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
 	acc = MonthlyAccumulator()
 	
 	# ── 2. Flux-correction spin-up ──────────────────────────────
-	println("% flux correction  CO2 = ", CO2_ctrl)
-	qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, log_exp)
+	if log_exp != 1 || cfg.log_qflux_dmc
+		# Load flux corrections when needed (log_exp==1 && cfg.log_qflux_dmc)
+		if log_exp == 1 && cfg.log_qflux_dmc
+			println("% loading flux correction fields...")
+			load_flux_corrections!(input_data_dir)
+		end
+		println("% flux correction  CO2 = ", CO2_ctrl)
+		qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, log_exp, cfg)
+	else
+		println("% flux correction skipped (log_exp=1 and log_qflux_dmc=false)")
+	end
 
 	# ── 3. Control run ──────────────────────────────────────────
 	println("% CONTROL RUN  CO2 = ", CO2_ctrl, "  time = ", time_ctrl, " yr")
@@ -2923,7 +2985,7 @@ function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
 	timestate = TimeState(1, 1)  # Initialize time state
 
 	for it in 1:(time_ctrl * nstep_yr)
-		res = time_loop!(it, year, CO2_ctrl, mon, irec, Ts1, Ta1, q1, To1, ctrl_output, ws, acc, timestate, log_exp)
+		res = time_loop!(it, year, CO2_ctrl, mon, irec, Ts1, Ta1, q1, To1, ctrl_output, ws, acc, timestate, log_exp, cfg)
 		Ts1 .= res.Ts0;  Ta1 .= res.Ta0
 		q1  .= res.q0;   To1 .= res.To0
 		mon  = res.mon;  irec = res.irec
@@ -2934,7 +2996,7 @@ function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
 	Ts1 .= Ts_ini;  Ta1 .= Ta_ini
 	q1  .= q_ini;   To1 .= To_ini
 	year = 1950;  CO2 = 340.0;  mon = 1;  irec = 0
-	if 35 <= log_exp <= 37
+	if 35 <= log_exp && log_exp <= 37
 		year = 1
 	end
 	sw_solar_forcing_state[] = 1.0
@@ -2942,10 +3004,14 @@ function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
 
 	scnr_output = MonthlyRecord[]
 	timestate = TimeState(1, 1)  # Initialize time state
+	# Precompute annual-mean control ice once and replicate
+	# across month dimension to match forcing(icmn_ctrl) interface.
+	icmn_ctrl_annual = dropdims(sum(icmn_ctrl; dims=3) ./ 12.0; dims=3)
+	icmn_ctrl_forcing = repeat(reshape(icmn_ctrl_annual, xdim, ydim, 1), 1, 1, 12)
 
 	for it in 1:(time_scnr * nstep_yr)
 		# Get forcing from enhanced dispatcher
-		forcing_result = forcing(it, year, log_exp; nstep_yr=nstep_yr)
+		forcing_result = forcing(it, year, log_exp, icmn_ctrl_forcing; nstep_yr=nstep_yr)
 		CO2 = forcing_result.CO2
 		sw_solar_forcing_state[] = forcing_result.sw_solar_forcing
 
@@ -2956,7 +3022,7 @@ function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
 		end
 
 		# Sensitivity experiment: SST+1 K over ocean
-		if 14 <= log_exp <= 16
+		if 14 <= log_exp && log_exp <= 16
 			CO2 = CO2_ctrl
 			ityr_now = mod(it - 1, nstep_yr) + 1
 			for j in 1:ydim, i in 1:xdim
@@ -2966,15 +3032,18 @@ function greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
 			end
 		end
 
-		res = time_loop!(it, year, CO2, mon, irec, Ts1, Ta1, q1, To1, scnr_output, ws, acc, timestate, log_exp)
+		res = time_loop!(it, year, CO2, mon, irec, Ts1, Ta1, q1, To1, scnr_output, ws, acc, timestate, log_exp, cfg)
+		Ts1 .= res.Ts0;  Ta1 .= res.Ta0
+		q1  .= res.q0;   To1 .= res.To0
+		mon  = res.mon;  irec = res.irec
 
 		# Advance year at year boundary
 		if mod(it, nstep_yr) == 0
 			year += 1
 		end
-	end
+	end 
 
-	if FORTRAN_OUTPUT_PARITY && !(35 <= log_exp <= 37) && !isempty(ctrl_output) && !isempty(scnr_output)
+	if !(35 <= log_exp && log_exp <= 37) && !isempty(ctrl_output) && !isempty(scnr_output)
 		ctrl_clim = build_monthly_climatology(ctrl_output)
 		scnr_output = apply_scenario_anomalies(scnr_output, ctrl_clim)
 	end
@@ -3019,36 +3088,6 @@ md"""
 # ╔═╡ 9b7a847e-a0d2-4421-9fb9-ff01b73c4194
 @bind run_toggle CheckBox(default=false)
 
-# ╔═╡ cf2a51eb-a661-4c66-9e0a-d1730110e4bc
-begin
-    # Ensure last_run is always defined globally
-    if !@isdefined(last_run)
-        global last_run = nothing
-    end
-    
-    # Initialize result variable
-    local result = nothing
-    
-    # Only run when toggle is ON
-    if run_toggle
-        # Execute model with current parameters
-        result = greb_model!(log_exp, time_flux, time_ctrl, time_scnr)
-        
-        # Store globally for visualization cells (ALWAYS update this)
-        global last_run = result
-        
-        # Show results
-        md"""
-        **✅ Run complete!**  
-        Control months: $(length(result.ctrl))  
-        Scenario months: $(length(result.scnr))
-        """
-    else
-        # Show ready message but DON'T change last_run
-        md"""**⏸️ Toggle ON to run model**"""
-    end
-end
-
 # ╔═╡ f7fb4846-5ee8-4ca5-a76f-1edcd58a0559
 md"""
 ### Accessing Results
@@ -3085,667 +3124,12 @@ plot(Ts_global_mean, xlabel="Month", ylabel="Global Mean Ts [K]")
 ```
 """
 
-# ╔═╡ e017e03a-2097-484c-9157-6736388de5a5
-md"""
----
-## 📊 Visualization Panel
-
-Automatically displays results after model execution.
-"""
-
-# ╔═╡ 013412f9-a6b2-430e-a019-64d37067aa25
-md"""
-### 📈 Time Series: Global Mean Temperature
-"""
-
-# ╔═╡ 0eb4168c-b151-42a6-afbc-457455247409
-begin
-	if last_run !== nothing
-		result = last_run
-		
-		if length(result.ctrl) > 0
-			# Calculate global mean temperature using gmean() for proper latitude weighting
-			Ts_ctrl_gmean = [gmean(rec.Ts) - 273.15 for rec in result.ctrl]  # Convert K to °C
-			months_ctrl = 1:length(Ts_ctrl_gmean)
-			
-			# Start plot with control run
-			p = plot(months_ctrl, Ts_ctrl_gmean,
-				label="Control Run",
-				linewidth=2,
-				xlabel="Month",
-				ylabel="Global Mean Temperature (°C)",
-				title="Temperature Evolution",
-				legend=:topleft,
-				size=(900, 450),
-				color=:blue)
-			
-			# Add scenario run if it exists
-			if length(result.scnr) > 0
-				Ts_scnr_gmean = [gmean(rec.Ts) - 273.15 for rec in result.scnr]
-				months_scnr = (1:length(Ts_scnr_gmean))
-				
-				plot!(p, months_scnr, Ts_scnr_gmean,
-					label="Scenario Run",
-					linewidth=2,
-					linestyle=:dash,
-					color=:red)
-			end
-			
-			p
-		else
-			plot(title="No Data Yet",
-				grid=false, showaxis=false, ticks=false,
-				size=(900, 300),
-				annotations=[(0.5, 0.5,
-					text("Click 'Run Model' to see temperature evolution", 14, :center))])
-		end
-	else
-		plot(title="No Data Yet",
-			grid=false, showaxis=false, ticks=false,
-			size=(900, 300),
-			annotations=[(0.5, 0.5,
-				text("Click 'Run Model' to see temperature evolution", 14, :center))])
-	end
-end
-
-# ╔═╡ efd61045-84a3-4d55-8770-9d8232eac72d
-md"""
-### 🎬 Month-by-Month Animation
-
-Watch your model results evolve through time! Enable **Auto-Play** to automatically cycle through months, or use the sliders below for manual control.
-
-**Animation Controls:**
-"""
-
-# ╔═╡ ac3cf8ff-9f12-43ff-8e37-b1452cd765a1
-@bind anim_controls PlutoUI.combine() do Child
-	md"""
-	**Auto-Play:** $(Child("play", CheckBox(default=false))) ▶️
-	
-	**Speed (months/sec):** $(Child("speed", Slider(1:10, default=2, show_value=true)))
-	
-	**Loop:** $(Child("loop", CheckBox(default=true))) 🔄
-	
-	*Tip: Enable auto-play to watch climate evolution through time!*
-	"""
-end
-
-# ╔═╡ 40fa8571-bfbe-44be-a598-985694f433eb
-begin
-	# Clock for animation - only ticks when play is enabled
-	if @isdefined(anim_controls) && anim_controls.play
-		@bind anim_tick Clock(1.0 / anim_controls.speed)
-	end
-end;
-
-# ╔═╡ 2bbb6867-c72a-4d98-9df9-432c78d872d8
-begin
-	# Animation logic for control run
-	if @isdefined(anim_controls) && @isdefined(last_run) && last_run !== nothing && anim_controls.play
-		n_ctrl = length(last_run.ctrl)
-		if n_ctrl > 0
-			# Use anim_tick to drive the animation
-			current_tick = @isdefined(anim_tick) ? anim_tick : 0
-			
-			if anim_controls.loop
-				# Loop back to start
-				auto_month_ctrl = mod(current_tick, n_ctrl) + 1
-			else
-				# Stop at end
-				auto_month_ctrl = min(current_tick + 1, n_ctrl)
-			end
-		else
-			auto_month_ctrl = 1
-		end
-	else
-		auto_month_ctrl = nothing
-	end
-end;
-
-# ╔═╡ 20407c87-9fbb-493b-a728-5cb3e4e1994f
-begin
-	# Animation logic for scenario run
-	if @isdefined(anim_controls) && @isdefined(last_run) && last_run !== nothing && anim_controls.play
-		n_scnr = length(last_run.scnr)
-		if n_scnr > 0
-			# Use anim_tick to drive the animation
-			current_tick_s = @isdefined(anim_tick) ? anim_tick : 0
-			
-			if anim_controls.loop
-				# Loop back to start
-				auto_month_scnr = mod(current_tick_s, n_scnr) + 1
-			else
-				# Stop at end
-				auto_month_scnr = min(current_tick_s + 1, n_scnr)
-			end
-		else
-			auto_month_scnr = 1
-		end
-	else
-		auto_month_scnr = nothing
-	end
-end;
-
-# ╔═╡ 7cb7267c-d6b8-4c0d-aacb-db327b4e355b
-md"""
-**Control Run:** Select month to view spatial fields (or enable auto-play above)
-"""
-
-# ╔═╡ e725576e-8561-46e0-a2c2-3b9f687e23b1
-@bind manual_month_ctrl Slider(
-	1:max(1, last_run !== nothing ? length(last_run.ctrl) : 1),
-	default=1,
-	show_value=true
-)
-
-# ╔═╡ 6bcf8ea0-ad7b-47d9-b7ac-52dd121de541
-begin
-	# Combine auto and manual control for control run
-	selected_month_ctrl = if @isdefined(auto_month_ctrl) && auto_month_ctrl !== nothing
-		auto_month_ctrl
-	else
-		manual_month_ctrl
-	end
-end;
-
-# ╔═╡ c4056819-2772-4e4e-a561-b532ae7b39cf
-md"""
-**Scenario Run:** Select month to view spatial fields (or enable auto-play above)
-"""
-
-# ╔═╡ d4a706f2-2e35-466a-b210-54ca0fe492dc
-@bind manual_month_scnr Slider(
-	1:max(1, last_run !== nothing ? length(last_run.scnr) : 1),
-	default=1,
-	show_value=true
-)
-
-# ╔═╡ b328c3d4-2ce1-48cd-a87c-93078e0dc265
-begin
-	# Combine auto and manual control for scenario run
-	selected_month_scnr = if @isdefined(auto_month_scnr) && auto_month_scnr !== nothing
-		auto_month_scnr
-	else
-		manual_month_scnr
-	end
-end;
-
-# ╔═╡ f79a5e86-abb5-4b2f-a695-30765ccc8f05
-begin
-	# Animation status display
-	if @isdefined(anim_controls) && @isdefined(last_run) && last_run !== nothing
-		if anim_controls.play
-			mode_text = anim_controls.loop ? "🔄 Looping" : "▶️ Playing"
-			speed_text = "$(anim_controls.speed) month(s)/sec"
-			ctrl_month = @isdefined(selected_month_ctrl) ? selected_month_ctrl : 1
-			scnr_month = @isdefined(selected_month_scnr) ? selected_month_scnr : 1
-			
-			md"""
-			**Animation Status:** $mode_text at $speed_text
-			
-			- **Control Run:** Month $ctrl_month / $(length(last_run.ctrl))
-			- **Scenario Run:** Month $scnr_month / $(length(last_run.scnr))
-			"""
-		else
-			md"""**Animation Status:** ⏸️ Paused (use sliders below for manual control)"""
-		end
-	else
-		md"""**Animation Status:** ⏹️ Ready (run model first, then enable auto-play)"""
-	end
-end
-
-# ╔═╡ dd4e6dd7-b0f7-44c0-8963-7c27cf5870eb
-md"""
-### 📊 Spatial Comparison: Control vs Scenario
-
-Side-by-side temperature comparison (last month of each run)
-"""
-
-# ╔═╡ 20893f38-2ed0-423e-b4cd-7bc6cea838e6
-begin
-	if last_run !== nothing
-		res_comp = last_run
-		
-		if length(res_comp.ctrl) > 0 && length(res_comp.scnr) > 0
-			# Get last months
-			last_ctrl_c = res_comp.ctrl[end]
-			last_scnr_c = res_comp.scnr[end]
-			
-			# Temperature difference
-			ΔTs = (last_scnr_c.Ts - last_ctrl_c.Ts)  # Keep in Kelvin for difference
-			
-			pc1 = heatmap((last_ctrl_c.Ts .- 273.15)',
-				title="Control: Ts (°C)",
-				color=:thermal,
-				clims=(-40, 40))
-			
-			pc2 = heatmap((last_scnr_c.Ts .- 273.15)',
-				title="Scenario: Ts (°C)",
-				color=:thermal,
-				clims=(-40, 40))
-			
-			pc3 = heatmap(ΔTs',
-				title="Difference: Scenario - Control (K)",
-				color=:RdBu_11,
-				clims=(-10, 10))
-			
-			plot(pc1, pc2, pc3,
-				layout=(1,3),
-				size=(1200, 350),
-				plot_title="Temperature Comparison (Last Month)")
-		elseif length(res_comp.ctrl) > 0
-			md"""*Run scenario to see comparison (set scenario years > 0)*"""
-		else
-			md"""*No data available*"""
-		end
-	else
-		md"""*Run the model to see comparisons*"""
-	end
-end
-
-# ╔═╡ 93b9eb7f-31d3-4548-a8cd-019ce0ebecd5
-md"""
----
-### 🗺️ Interactive Map Visualization
-
-Explore model output fields interactively with global map projections, contour overlays, and point-value probing.
-"""
-
-# ╔═╡ 8cbdc12e-2382-40f8-84ab-233555f6a2ed
-# color_palette_function
-"""
-    get_color_palette(name::String)
-
-Return a valid Plots.jl colormap for the given palette name.
-"""
-function get_color_palette(name::String)
-    palette_map = Dict(
-        "viridis" => :viridis,
-        "temperature" => :RdBu,
-        "ice" => :Blues,
-        "balance" => :balance,
-        "terrain" => :terrain,
-        "rainbow" => :rainbow
-    )
-    return get(palette_map, name, :viridis)
-end
-
-# ╔═╡ b02a39fc-1b59-4fb3-a83e-c441c575a6b5
-md"""
-#### 🎮 Visualization Controls
-"""
-
-# ╔═╡ acf483be-d387-47ea-8d91-444cdba7c674
-# longitude_latitude_centers
-begin
-    # Longitude centers (0 to 357.75°E in steps of 3.75°)
-    lon_centers = range(0, length=xdim, step=dlon)
-    
-    # Latitude centers (from -88.125°N to 88.125°N)
-    lat_centers = range(-90 + dlat/2, length=ydim, step=dlat)
-end
-
-# ╔═╡ 450e734d-3028-4ba4-b63b-ee32d3825dcd
-begin
-	"""
-	    plot_climate_grid(rec::NamedTuple, month_idx::Int, n_months::Int, title::String)
-	
-	Create a 2×2 grid of key climate variable maps for a given monthly record.
-	Shows: Surface Temperature, Precipitation, Ice Coverage, and Albedo.
-	"""
-	function plot_climate_grid(rec::NamedTuple, month_idx::Int, n_months::Int, title::String)
-		# Create individual heatmaps
-		p1 = heatmap(lon_centers, lat_centers, (rec.Ts .- 273.15)',
-		             xlabel="Longitude", ylabel="Latitude",
-		             title="Surface Temperature (°C)",
-		             c=:thermal, clims=(-40, 40),
-		             aspect_ratio=:auto, colorbar=true)
-		contour!(p1, lon_centers, lat_centers, z_topo',
-		         levels=[0], linewidth=1, linecolor=:black, 
-		         linealpha=0.4, legend=false)
-		
-		# Use robust color limits based on actual data
-		precip_max = max(maximum(rec.precip), 0.1)  # Ensure non-zero max
-		p2 = heatmap(lon_centers, lat_centers, rec.precip',
-		             xlabel="Longitude", ylabel="Latitude",
-		             title="Precipitation (mm/day)",
-		             c=:Blues, clims=(0, min(precip_max * 1.1, 20.0)),
-		             aspect_ratio=:auto, colorbar=true)
-		contour!(p2, lon_centers, lat_centers, z_topo',
-		         levels=[0], linewidth=1, linecolor=:black,
-		         linealpha=0.4, legend=false)
-		
-		p3 = heatmap(lon_centers, lat_centers, rec.ice',
-		             xlabel="Longitude", ylabel="Latitude",
-		             title="Ice Coverage (fraction)",
-		             c=:ice, clims=(0, 1),
-		             aspect_ratio=:auto, colorbar=true)
-		contour!(p3, lon_centers, lat_centers, z_topo',
-		         levels=[0], linewidth=1, linecolor=:black,
-		         linealpha=0.4, legend=false)
-
-		# Use viridis for better albedo visualization
-		p4 = heatmap(lon_centers, lat_centers, rec.albedo',
-		             xlabel="Longitude", ylabel="Latitude",
-		             title="Surface Albedo",
-		             c=:viridis, clims=(0.0, 0.8),
-		             aspect_ratio=:auto, colorbar=true)
-		contour!(p4, lon_centers, lat_centers, z_topo',
-		         levels=[0], linewidth=1, linecolor=:black,
-		         linealpha=0.4, legend=false)
-		
-		# Combine into 2×2 grid
-		plot(p1, p2, p3, p4,
-		     layout=(2, 2),
-		     size=(900, 800),
-		     plot_title="$title - Month $month_idx of $n_months")
-	end
-end;
-
-# ╔═╡ 69d9d3bf-d147-4a26-90d8-57a19ee774d6
-begin
-	if last_run !== nothing && length(last_run.ctrl) > 0
-		result_ctrl = last_run.ctrl
-		n_months_ctrl = length(result_ctrl)
-		
-		# Clamp selected month to valid range
-		month_idx = min(manual_month_ctrl, n_months_ctrl)
-		rec = result_ctrl[month_idx]
-		
-		# Use helper function to create 2×2 grid with coastlines
-		plot_climate_grid(rec, month_idx, n_months_ctrl, "Control Run")
-	else
-		plot(title="No Data Yet",
-			grid=false, showaxis=false, ticks=false,
-			size=(900, 400),
-			annotations=[(0.5, 0.5,
-				text("Run the model to see spatial fields", 14, :center))])
-	end
-end
-
-# ╔═╡ 853a1990-5ddf-44e5-a6f1-0d9125e1e56d
-begin
-	if last_run !== nothing && length(last_run.scnr) > 0
-		result_scnr = last_run.scnr
-		n_months_scnr = length(result_scnr)
-		
-		if n_months_scnr > 0
-			# Clamp selected month to valid range
-			month_idx_s = min(selected_month_scnr, n_months_scnr)
-			rec_s = result_scnr[month_idx_s]
-			
-			# Use helper function to create 2×2 grid with coastlines
-			plot_climate_grid(rec_s, month_idx_s, n_months_scnr, "Scenario Run")
-		else
-			plot(title="No Scenario Data",
-				grid=false, showaxis=false, ticks=false,
-				size=(900, 400))
-		end
-	else
-		md"""*No scenario run data available. Set scenario years > 0 and run the model.*"""
-	end
-end
-
-# ╔═╡ 4970ead0-95b5-407a-95b0-c56af87df9ce
-function find_nearest_gridpoint(lon::Number, lat::Number)
-    # Convert input longitude to 0-360° range (our grid uses 0 to 360°)
-    lon_norm = mod(lon, 360)
-    
-    # Handle special case near the prime meridian wrap
-    # If longitude is near 0° or 360°, check both sides
-    lon_centers_vals = lon_centers  # Already in 0-360°
-    
-    # Find nearest index
-    lon_idx = argmin(abs.(lon_centers_vals .- lon_norm))
-    
-    # Latitude is straightforward (-90 to 90)
-    lat_idx = argmin(abs.(lat_centers .- lat))
-    
-    return (
-        lon_idx = lon_idx,
-        lat_idx = lat_idx,
-        lon = lon_centers[lon_idx],
-        lat = lat_centers[lat_idx]
-    )
-end
-
-# ╔═╡ 31bde603-0cd1-40c3-b683-514289fa1a7d
-begin
-	"""
-	    plot_field_map(data::Matrix, variable_name::String, month::Int;
-	                   colorscale::String="temperature", 
-	                   show_contours::Bool=true,
-	                   probe_lon=nothing, probe_lat=nothing)
-	
-	Create interactive world map visualization of a model field.
-	"""
-	function plot_field_map(data::Matrix, variable_name::String, month::Int;
-	                        colorscale::String="temperature",
-	                        show_contours::Bool=true,
-	                        probe_lon=nothing, probe_lat=nothing)
-
-		# Data validation - check for unrealistic values
-		data_min, data_max = extrema(data)
-		if variable_name in ["Surface Temperature (K)", "Atmospheric Temperature (K)", "Ocean Temperature (K)"]
-			if data_max > 400.0 || data_min < 100.0
-				@warn "Unrealistic temperature detected: range [$(round(data_min, digits=2)), $(round(data_max, digits=2))] K. Check model initialization or data corruption."
-			end
-		end
-		if any(isnan, data) || any(isinf, data)
-			@warn "Data contains NaN or Inf values in $variable_name"
-		end
-		
-		# Get color palette
-		cmap = get_color_palette(colorscale)
-		
-		# Month names
-		month_names = ["January", "February", "March", "April", "May", "June",
-		               "July", "August", "September", "October", "November", "December"]
-		
-		# Create base heatmap
-		p = heatmap(lon_centers, lat_centers, data',
-		            xlabel="Longitude (°E)",
-		            ylabel="Latitude (°N)",
-		            title="$variable_name - $(month_names[month])",
-		            c=cmap,
-		            aspect_ratio=:auto,
-		            size=(900, 450),
-		            colorbar_title=variable_name,
-		            clims=:auto)
-		
-		# Add contour lines if requested
-		if show_contours
-			# Determine contour levels based on variable
-			if variable_name in ["Surface Temperature (K)", "Atmospheric Temperature (K)", "Ocean Temperature (K)"]
-				# Temperature: show freezing line (273.15 K) and other isotherms
-				contour!(p, lon_centers, lat_centers, data',
-				         levels=[273.15],
-				         linewidth=2,
-				         linecolor=:black,
-				         linestyle=:solid,
-				         label="0°C",
-				         legend=:topright)
-			elseif variable_name == "Ice Coverage"
-				# Ice: show 50% coverage line
-				contour!(p, lon_centers, lat_centers, data',
-				         levels=[0.5],
-				         linewidth=2,
-				         linecolor=:red,
-				         linestyle=:dash,
-				         label="50% Ice",
-				         legend=:topright)
-			else
-				# General contours
-				contour!(p, lon_centers, lat_centers, data',
-				         levels=5,
-				         linewidth=1,
-				         linecolor=:black,
-				         linealpha=0.3,
-				         legend=false)
-			end
-		end
-
-		# Add coastlines using topography data (ocean/land boundary)
-		contour!(p, lon_centers, lat_centers, z_topo',
-		         levels=[0],
-		         linewidth=1,
-		         linecolor=:black,
-		         linestyle=:solid,
-		         linealpha=0.4,
-		         legend=false)
-		
-		# Add probe marker if coordinates provided
-		if probe_lon !== nothing && probe_lat !== nothing
-			gridpt = find_nearest_gridpoint(probe_lon, probe_lat)
-			scatter!(p, [gridpt.lon], [gridpt.lat],
-			         markersize=8,
-			         markercolor=:yellow,
-			         markerstrokecolor=:black,
-			         markerstrokewidth=2,
-			         label="Probe Point",
-			         legend=:topright)
-		end
-		
-		return p
-	end
-end;
-
-# ╔═╡ adffb977-433a-462b-b681-384598896780
-@bind viz_controls PlutoUI.combine() do Child
-	md"""
-	**Dataset:** $(Child("dataset", Select(["ctrl" => "Control Run", "scnr" => "Scenario Run"], default="ctrl")))
-	
-	**Variable:** $(Child("variable", Select([
-		"Ts" => "Surface Temperature (K)",
-		"Ta" => "Atmospheric Temperature (K)",
-		"To" => "Ocean Temperature (K)",
-		"q" => "Humidity (kg/kg)",
-		"albedo" => "Surface Albedo",
-		"ice" => "Ice Coverage",
-		"precip" => "Precipitation (mm/day)",
-		"evap" => "Evaporation (mm/day)",
-		"sw" => "Shortwave Radiation (W/m²)",
-		"lw" => "Longwave Radiation (W/m²)",
-		"qlat" => "Latent Heat Flux (W/m²)",
-		"qsens" => "Sensible Heat Flux (W/m²)",
-		"qcrcl" => "Circulation Heat Flux (W/m²)"
-	], default="Ts")))
-	
-	**Month:** $(Child("month", Slider(1:12, default=1, show_value=true)))
-	
-	**Color Scale:** $(Child("colorscale", Select([
-		"viridis" => "Viridis (Sequential)",
-		"temperature" => "Temperature (Blue-Red)",
-		"ice" => "Ice (White-Blue)",
-		"balance" => "Balance (Red-White-Blue)",
-		"terrain" => "Terrain",
-		"rainbow" => "Rainbow"
-	], default="temperature")))
-	
-	**Show Contours:** $(Child("contours", CheckBox(default=true)))
-	"""
-end
-
-# ╔═╡ 3a3791b1-f72c-40bc-8ba3-e6b2741ec855
-@bind probe_controls PlutoUI.combine() do Child
-	md"""
-	**Latitude:** $(Child("lat", Slider(-90:90, default=0, show_value=true)))°
-	
-	**Longitude:** $(Child("lon", Slider(-180:180, default=0, show_value=true)))°
-	"""
-end
-
-# ╔═╡ 3b69b36c-f4c9-4982-97c8-d1042ed404b6
-begin
-	# Only plot if last_run exists
-	if @isdefined(last_run)
-		# Get selected dataset
-		selected_data = viz_controls.dataset == "ctrl" ? last_run.ctrl : last_run.scnr
-		
-		# Check if data is available
-		if !isempty(selected_data) && viz_controls.month <= length(selected_data)
-			# Get the selected monthly record
-			monthly_data = selected_data[viz_controls.month]
-			
-			# Extract the selected variable
-			field_data = getfield(monthly_data, Symbol(viz_controls.variable))
-			
-			# Get variable name for display
-			var_name = viz_controls.variable
-			var_display = Dict(
-				"Ts" => "Surface Temperature (K)",
-				"Ta" => "Atmospheric Temperature (K)",
-				"To" => "Ocean Temperature (K)",
-				"q" => "Humidity (kg/kg)",
-				"albedo" => "Surface Albedo",
-				"ice" => "Ice Coverage",
-				"precip" => "Precipitation (mm/day)",
-				"evap" => "Evaporation (mm/day)",
-				"sw" => "Shortwave Radiation (W/m²)",
-				"lw" => "Longwave Radiation (W/m²)",
-				"qlat" => "Latent Heat Flux (W/m²)",
-				"qsens" => "Sensible Heat Flux (W/m²)",
-				"qcrcl" => "Circulation Heat Flux (W/m²)"
-			)[var_name]
-			
-			# Create the plot
-			plot_field_map(field_data, var_display, viz_controls.month,
-			               colorscale=viz_controls.colorscale,
-			               show_contours=viz_controls.contours,
-			               probe_lon=probe_controls.lon,
-			               probe_lat=probe_controls.lat)
-		else
-			plot(title="No data available - Run the model first",
-			     framestyle=:none, showaxis=false, size=(900, 450))
-		end
-	else
-		plot(title="Model not yet run - Execute the model to see results",
-		     framestyle=:none, showaxis=false, size=(900, 450))
-	end
-end
-
-# ╔═╡ 1756d395-5de2-4794-9fc0-c09bdfe0478b
-md"""
-#### 📍 Probed Point Value
-"""
-
-# ╔═╡ 0024887c-d4d6-42cb-8d2c-16832c24be1e
-begin
-	if @isdefined(last_run)
-		selected_data_probe = viz_controls.dataset == "ctrl" ? last_run.ctrl : last_run.scnr
-		
-		if !isempty(selected_data_probe) && viz_controls.month <= length(selected_data_probe)
-			# Find nearest grid point
-			gridpt = find_nearest_gridpoint(probe_controls.lon, probe_controls.lat)
-			
-			# Get value at probed location
-			monthly_data_probe = selected_data_probe[viz_controls.month]
-			field_data_probe = getfield(monthly_data_probe, Symbol(viz_controls.variable))
-			probe_value = field_data_probe[gridpt.ix, gridpt.iy]
-			
-			# Format output
-			md"""
-			**Probed Location:**
-			- Requested: ($(probe_controls.lon)°E, $(probe_controls.lat)°N)
-			- Nearest Grid Point: ($(round(gridpt.lon, digits=2))°E, $(round(gridpt.lat, digits=2))°N)
-			- Grid Index: (i=$(gridpt.ix), j=$(gridpt.iy))
-			
-			**Value:** $(round(probe_value, digits=3))
-			"""
-		else
-			md"_No data available - Run the model first_"
-		end
-	else
-		md"_Model not yet run - Execute the model to see results_"
-	end
-end
-
 # ╔═╡ 9d3eea3d-1ba6-4650-9187-85fa5aeca210
 md"""
 ---
 ### 💾 Export Data
 
-Export model results to NetCDF or CSV format for further analysis.
+Export model results to NetCDF format for further analysis.
 """
 
 # ╔═╡ 3d93d6ce-6f7a-4083-ade9-89ba0058bae0
@@ -3757,6 +3141,8 @@ md"""
 @bind export_controls PlutoUI.combine() do Child
 	md"""
 	**Dataset:** $(Child("dataset", Select(["ctrl" => "Control Run", "scnr" => "Scenario Run"], default="ctrl")))
+
+	**Export Mode:** $(Child("mode", Select(["single" => "Single Month", "timeseries" => "Full Time Series"], default="single")))
 	
 	**Export Month:** $(Child("month", Slider(1:12, default=1, show_value=true)))
 	
@@ -3768,87 +3154,263 @@ end
 md"""
 **Export Summary:**
 
-Click the button below to export the selected dataset and month. Files will be saved in the workspace directory.
+Click the button below to export either a single month or the full time series. Files will be saved in the workspace directory.
 """
 
-# ╔═╡ 45cca021-ba93-4f56-986d-59a55b4a1c47
-# ╠═╡ skip_as_script = true
-#=╠═╡
+# ╔═╡ 3f7349aa-da11-4d27-a637-5286950d3244
+@bind do_export CheckBox()
+
+# ╔═╡ 39afec69-f90d-4ff2-99d1-5cfec84d09a1
+function current_physics_config()
+	return PhysicsConfig(
+		log_clouds_dmc = log_clouds_dmc,
+		log_vapor_dmc = log_vapor_dmc,
+		log_ice_dmc = log_ice_dmc,
+		log_crcl_dmc = log_crcl_dmc,
+		log_hydro_dmc = log_hydro_dmc,
+		log_deepocean_dmc = log_deepocean_dmc,
+		log_atmos_dmc = log_atmos_dmc,
+		log_co2_dmc = log_co2_dmc,
+		log_ocean_dmc = log_ocean_dmc,
+		log_qflux_dmc = log_qflux_dmc,
+		log_clouds_drsp = log_clouds_drsp,
+		log_vapor_drsp = log_vapor_drsp,
+		log_ice_drsp = log_ice_drsp,
+		log_crcl_drsp = log_crcl_drsp,
+		log_hydro_drsp = log_hydro_drsp,
+		log_deepocean_drsp = log_deepocean_drsp,
+		log_topo_drsp = log_topo_drsp,
+		log_humid_drsp = log_humid_drsp,
+		log_ice = log_ice,
+		log_hdif = log_hdif,
+		log_hadv = log_hadv,
+		log_vdif = log_vdif,
+		log_vadv = log_vadv,
+		log_conv = log_conv,
+		log_rain = log_rain,
+		log_eva = log_eva,
+		log_clim = log_clim,
+		log_tsurf_ext = log_tsurf_ext,
+		log_hwind_ext = log_hwind_ext,
+		log_omega_ext = log_omega_ext,
+	)
+end
+
+# ╔═╡ cf2a51eb-a661-4c66-9e0a-d1730110e4bc
 begin
-	"""
-	    export_to_csv(data::NamedTuple, filename::String, variable::Symbol)
-	
-	Export a single variable from MonthlyRecord to CSV format.
-	Returns the path to the created file.
-	"""
-	function export_to_csv(data::NamedTuple, filename::String, variable::Symbol)
-		# Create filename with .csv extension
-		csv_file = endswith(filename, ".csv") ? filename : filename * "_$(variable).csv"
+    # Ensure last_run is always defined globally
+    if !@isdefined(last_run)
+        global last_run = nothing
+    end
+    
+    # Initialize result variable
+    local result = nothing
+    
+    # Only run when toggle is ON
+    if run_toggle
+		cfg = current_physics_config()
 		
-		# Get the variable data
-		var_data = getfield(data, variable)
-		
-		# Write to CSV with proper formatting
-		open(csv_file, "w") do io
-			# Write header with longitude values
-			write(io, "lat\\lon")
-			for lon in lon_centers
-				write(io, ",$(round(lon, digits=2))")
-			end
-			write(io, "\n")
-			
-			# Write data rows with latitude labels
-			for j in 1:ydim
-				write(io, "$(round(lat_centers[j], digits=2))")
-				for i in 1:xdim
-					write(io, ",$(var_data[i, j])")
+        # Execute model with current parameters
+        result = greb_model!(log_exp, time_flux, time_ctrl, time_scnr, cfg)
+        
+        # Store globally for visualization cells (ALWAYS update this)
+        global last_run = result
+        
+        # Show results
+        md"""
+        **✅ Run complete!**  
+        Control months: $(length(result.ctrl))  
+        Scenario months: $(length(result.scnr))
+        """
+    else
+        # Show ready message but DON'T change last_run
+        md"""**⏸️ Toggle ON to run model**"""
+    end
+end
+
+# ╔═╡ 3f7349aa-da11-4d27-a637-5286950d3245
+begin
+    # Define lon/lat centers for NetCDF export
+    lon_centers = range(0, length=xdim, step=dlon)
+    lat_centers = range(-90 + dlat/2, length=ydim, step=dlat)
+    
+    const EXPORT_FIELDS = (:Ts, :Ta, :To, :q, :albedo, :ice, :precip, :evap, :qcrcl, 						   :sw, :lw, :qlat, :qsens)
+    const EXPORT_UNITS = Dict(
+        :Ts => "K", :Ta => "K", :To => "K", :q => "kg/kg", :albedo => "1", 
+		:ice => "1", :precip => "mm/day", :evap => "mm/day", :qcrcl => "mm/day",
+        :sw => "W m-2", :lw => "W m-2", :qlat => "W m-2", :qsens => "W m-2",
+    )
+
+	function export_to_netcdf(record::MonthlyRecord, filename::String; dataset_name::String="", month_index::Int=0)
+        base = endswith(lowercase(filename), ".nc") ? filename[1:end-3] : filename
+        nc_file = abspath(base * ".nc")
+        out_dir = dirname(nc_file)
+        isdir(out_dir) || mkpath(out_dir)
+
+        NCDataset(nc_file, "c") do ds
+            defDim(ds, "lon", xdim)
+            defDim(ds, "lat", ydim)
+
+            vlon = defVar(ds, "lon", Float64, ("lon",))
+            vlat = defVar(ds, "lat", Float64, ("lat",))
+            vlon[:] = lon_centers
+            vlat[:] = lat_centers
+            vlon.attrib["units"] = "degrees_east"
+            vlat.attrib["units"] = "degrees_north"
+
+            for fld in EXPORT_FIELDS
+                var_data = getfield(record, fld)
+                size(var_data) == (xdim, ydim) || error("Unexpected data shape for $fld: $(size(var_data)), expected ($(xdim), $(ydim))")
+                v = defVar(ds, String(fld), Float64, ("lon", "lat"))
+                v[:, :] = var_data
+                v.attrib["units"] = EXPORT_UNITS[fld]
+				v.attrib["long_name"] = "$(fld) monthly field"
+            end
+
+				ds.attrib["title"] = "GREB monthly export"
+				ds.attrib["dataset"] = dataset_name
+            ds.attrib["month_index"] = string(month_index)
+            ds.attrib["export_mode"] = "single"
+        end
+
+        return nc_file
+    end
+
+	function export_timeseries_to_netcdf(records::Vector{MonthlyRecord}, filename::String;
+		dataset_name::String="")
+		isempty(records) && error("Cannot export empty time series")
+
+		base = endswith(lowercase(filename), ".nc") ? filename[1:end-3] : filename
+		nc_file = abspath(base * ".nc")
+		out_dir = dirname(nc_file)
+		isdir(out_dir) || mkpath(out_dir)
+		nmonths = length(records)
+
+		NCDataset(nc_file, "c") do ds
+			defDim(ds, "lon", xdim)
+			defDim(ds, "lat", ydim)
+			defDim(ds, "time", nmonths)
+
+			vlon = defVar(ds, "lon", Float64, ("lon",))
+			vlat = defVar(ds, "lat", Float64, ("lat",))
+			vtime = defVar(ds, "time", Int32, ("time",))
+			vlon[:] = lon_centers
+			vlat[:] = lat_centers
+			vtime[:] = collect(Int32(1):Int32(nmonths))
+			vlon.attrib["units"] = "degrees_east"
+			vlat.attrib["units"] = "degrees_north"
+			vtime.attrib["units"] = "month_index"
+			vtime.attrib["long_name"] = "monthly record index"
+
+			for fld in EXPORT_FIELDS
+				v = defVar(ds, String(fld), Float64, ("lon", "lat", "time"))
+				v.attrib["units"] = EXPORT_UNITS[fld]
+				v.attrib["long_name"] = "$(fld) monthly time series"
+				for t in 1:nmonths
+					var_data = getfield(records[t], fld)
+					size(var_data) == (xdim, ydim) || error("Unexpected data shape for $fld at time $t: $(size(var_data)), expected ($(xdim), $(ydim))")
+					v[:, :, t] = var_data
 				end
-				write(io, "\n")
 			end
+
+			ds.attrib["title"] = "GREB monthly export"
+			ds.attrib["dataset"] = dataset_name
+			ds.attrib["export_mode"] = "timeseries"
+			ds.attrib["n_months"] = string(nmonths)
 		end
-		
-		return csv_file
-	end
-	
-	"""
-	    export_data_diagnostics(data::NamedTuple)
-	
-	Provide diagnostic information about the data to help debug zero values.
-	"""
-	function export_data_diagnostics(data::NamedTuple)
-		diag = Dict{String, Any}()
-		
-		for (var_name, var_data) in pairs(data)
-			var_min, var_max = extrema(var_data)
-			var_mean = mean(var_data)
-			non_zero = count(!=(0.0), var_data)
-			
-			diag[String(var_name)] = (
-				min = var_min,
-				max = var_max,
-				mean = var_mean,
-				non_zero_count = non_zero,
-				total_points = length(var_data)
-			)
-		end
-		
-		return diag
+
+		return nc_file
 	end
 end;
-  ╠═╡ =#
 
-# ╔═╡ 3f7349aa-da11-4d27-a637-5286950d3244
-@bind do_export Button("📥 Export Data")
+# ╔═╡ 3f7349aa-da11-4d27-a637-5286950d3246
+begin
+	if do_export > 0
+		if isnothing(last_run)
+			md"**Export failed:** no model run available. Run the model first."
+		else
+			dataset = Symbol(export_controls.dataset)
+			export_mode = String(export_controls.mode)
+			records = getfield(last_run, dataset)
+			if isempty(records)
+				md"**Export failed:** selected dataset is empty."
+			else
+				month_idx = clamp(export_controls.month, 1, length(records))
+				filename = String(strip(export_controls.filename))
+				if isempty(filename)
+					md"**Export failed:** please provide a filename."
+				else
+					try
+						nc_file = if export_mode == "single"
+							export_to_netcdf(records[month_idx], filename;
+								dataset_name=string(dataset), month_index=month_idx)
+						elseif export_mode == "timeseries"
+							export_timeseries_to_netcdf(records, filename;
+								dataset_name=string(dataset))
+						else
+							error("Unknown export mode: $export_mode")
+						end
+
+						md"""
+						**Export complete:**
+						- Dataset: `$(dataset)`
+						- Mode: `$(export_mode)`
+						- Record index: `$(export_mode == "single" ? month_idx : "all")`
+						- Format: `NetCDF (.nc)`
+						- File: `$(nc_file)`
+						"""
+					catch err
+						md"**Export failed:** $(sprint(showerror, err))"
+					end
+				end
+			end
+		end
+	end
+end
+
+# ╔═╡ b0d6a9e3-5c3a-4408-ab87-1067c2dfaeb7
+begin
+    if @isdefined(last_run) && !isnothing(last_run) && !isempty(last_run.ctrl)
+        println("="^50)
+        println("GREB MODEL OUTPUT")
+        println("="^50)
+        
+        rec = last_run.ctrl[1]
+        
+        println("\n🌡️ TEMPERATURE (K):")
+        println("   Surface (Ts): min=$(round(minimum(rec.Ts), digits=1)), mean=$(round(mean(rec.Ts), digits=1)), max=$(round(maximum(rec.Ts), digits=1))")
+        println("   Air (Ta):     min=$(round(minimum(rec.Ta), digits=1)), mean=$(round(mean(rec.Ta), digits=1)), max=$(round(maximum(rec.Ta), digits=1))")
+        println("   Ocean (To):   min=$(round(minimum(rec.To), digits=1)), mean=$(round(mean(rec.To), digits=1)), max=$(round(maximum(rec.To), digits=1))")
+        
+        println("\n💧 HYDROLOGY (mm/day):")
+        println("   Precip: min=$(round(minimum(rec.precip), digits=2)), mean=$(round(mean(rec.precip), digits=2)), max=$(round(maximum(rec.precip), digits=2))")
+        println("   Evap:   min=$(round(minimum(rec.evap), digits=2)), mean=$(round(mean(rec.evap), digits=2)), max=$(round(maximum(rec.evap), digits=2))")
+        
+        println("\n☀️ RADIATION (W/m²):")
+        println("   SW: min=$(round(minimum(rec.sw), digits=1)), mean=$(round(mean(rec.sw), digits=1)), max=$(round(maximum(rec.sw), digits=1))")
+        println("   LW: min=$(round(minimum(rec.lw), digits=1)), mean=$(round(mean(rec.lw), digits=1)), max=$(round(maximum(rec.lw), digits=1))")
+        
+        println("\n🪞 ALBEDO:")
+        println("   min=$(round(minimum(rec.albedo), digits=2)), mean=$(round(mean(rec.albedo), digits=2)), max=$(round(maximum(rec.albedo), digits=2))")
+        
+        println("\n❄️ ICE FRACTION:")
+        println("   min=$(round(minimum(rec.ice), digits=2)), mean=$(round(mean(rec.ice), digits=2)), max=$(round(maximum(rec.ice), digits=2))")
+        
+        println("\n✅ All finite: $(all(isfinite, rec.Ts))")
+        
+    else
+        println("❌ No model output found. Run the model first!")
+        println("   Set time_ctrl >= 1 and toggle run_toggle ON")
+    end
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
-Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
@@ -3866,7 +3428,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.12.0"
 manifest_format = "2.0"
-project_hash = "8894408a450815b7bef03936cc253be822a020f9"
+project_hash = "20d3a42f85a62697022a1cd21243a9a61d75403e"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -5330,6 +4892,7 @@ version = "1.9.2+0"
 # ╟─0780e492-cdcd-43fb-af85-f9a4bab37450
 # ╟─d0ebd34f-a83a-4dc1-9c66-24a3878b681d
 # ╟─b303e4e9-49fa-45ad-967e-20f165fdf38c
+# ╟─f578f25e-047e-4a7e-8483-d544c7b4bec3
 # ╟─2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3
 # ╟─8578d6aa-2782-4279-8f6b-78194b8ecc10
 # ╟─ebca5877-1305-40f1-ac52-66356dc17661
@@ -5341,6 +4904,7 @@ version = "1.9.2+0"
 # ╟─b96052b9-4272-4d78-9e43-927bc872c43a
 # ╟─60f0f581-0bcf-40e7-9a45-86eaceba9040
 # ╟─dc0f1a5e-1e7b-4a9d-816e-731d2747ac4e
+# ╟─19f106e4-2b82-47e1-9284-799a105f30cb
 # ╟─54e63724-44ca-42b9-9246-7afb271b8154
 # ╟─32b531ab-ee71-4685-af65-a2bae0b868f6
 # ╟─caec8065-9874-4d8c-8e7e-598a97506f06
@@ -5382,7 +4946,7 @@ version = "1.9.2+0"
 # ╟─2a859d43-5768-4b98-88fa-978b12203513
 # ╟─c0c40037-4169-4d38-bebe-2086cebc24f2
 # ╟─0febe534-237e-4921-b39c-3828dbae9d19
-# ╟─606032a2-b2ca-4fd8-9930-afd83aecec7a
+# ╠═606032a2-b2ca-4fd8-9930-afd83aecec7a
 # ╟─a1c04c52-f7c9-430a-8791-7fea15650b2c
 # ╟─c6a0d656-8289-4f74-b8d8-f94c236e541d
 # ╟─34fb479a-9834-4354-8f36-2680bedec798
@@ -5437,42 +5001,14 @@ version = "1.9.2+0"
 # ╟─9b7a847e-a0d2-4421-9fb9-ff01b73c4194
 # ╟─cf2a51eb-a661-4c66-9e0a-d1730110e4bc
 # ╟─f7fb4846-5ee8-4ca5-a76f-1edcd58a0559
-# ╟─e017e03a-2097-484c-9157-6736388de5a5
-# ╟─013412f9-a6b2-430e-a019-64d37067aa25
-# ╟─0eb4168c-b151-42a6-afbc-457455247409
-# ╟─efd61045-84a3-4d55-8770-9d8232eac72d
-# ╟─ac3cf8ff-9f12-43ff-8e37-b1452cd765a1
-# ╟─f79a5e86-abb5-4b2f-a695-30765ccc8f05
-# ╟─40fa8571-bfbe-44be-a598-985694f433eb
-# ╟─2bbb6867-c72a-4d98-9df9-432c78d872d8
-# ╟─20407c87-9fbb-493b-a728-5cb3e4e1994f
-# ╟─6bcf8ea0-ad7b-47d9-b7ac-52dd121de541
-# ╟─450e734d-3028-4ba4-b63b-ee32d3825dcd
-# ╟─7cb7267c-d6b8-4c0d-aacb-db327b4e355b
-# ╟─e725576e-8561-46e0-a2c2-3b9f687e23b1
-# ╟─69d9d3bf-d147-4a26-90d8-57a19ee774d6
-# ╟─c4056819-2772-4e4e-a561-b532ae7b39cf
-# ╟─d4a706f2-2e35-466a-b210-54ca0fe492dc
-# ╟─b328c3d4-2ce1-48cd-a87c-93078e0dc265
-# ╟─853a1990-5ddf-44e5-a6f1-0d9125e1e56d
-# ╟─dd4e6dd7-b0f7-44c0-8963-7c27cf5870eb
-# ╟─20893f38-2ed0-423e-b4cd-7bc6cea838e6
-# ╟─93b9eb7f-31d3-4548-a8cd-019ce0ebecd5
-# ╟─4970ead0-95b5-407a-95b0-c56af87df9ce
-# ╟─31bde603-0cd1-40c3-b683-514289fa1a7d
-# ╟─8cbdc12e-2382-40f8-84ab-233555f6a2ed
-# ╟─b02a39fc-1b59-4fb3-a83e-c441c575a6b5
-# ╟─acf483be-d387-47ea-8d91-444cdba7c674
-# ╟─adffb977-433a-462b-b681-384598896780
-# ╟─3a3791b1-f72c-40bc-8ba3-e6b2741ec855
-# ╟─3b69b36c-f4c9-4982-97c8-d1042ed404b6
-# ╟─1756d395-5de2-4794-9fc0-c09bdfe0478b
-# ╟─0024887c-d4d6-42cb-8d2c-16832c24be1e
 # ╟─9d3eea3d-1ba6-4650-9187-85fa5aeca210
 # ╟─3d93d6ce-6f7a-4083-ade9-89ba0058bae0
 # ╟─47d3626b-463c-4090-b12a-5ed5f5e8ce62
 # ╟─93913dcc-aae0-40fe-9837-92e9a251aadf
-# ╟─45cca021-ba93-4f56-986d-59a55b4a1c47
 # ╟─3f7349aa-da11-4d27-a637-5286950d3244
+# ╟─39afec69-f90d-4ff2-99d1-5cfec84d09a1
+# ╟─3f7349aa-da11-4d27-a637-5286950d3245
+# ╟─3f7349aa-da11-4d27-a637-5286950d3246
+# ╟─b0d6a9e3-5c3a-4408-ab87-1067c2dfaeb7
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
