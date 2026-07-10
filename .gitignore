@@ -1,0 +1,12 @@
+# Julia package artifacts
+/Manifest.toml
+/test/Manifest.toml
+/docs/build/
+/docs/Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+.DS_Store
+
+# example outputs
+/examples/*.png
