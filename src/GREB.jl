@@ -101,27 +101,27 @@ end
 # Note: this should be in the script
 begin
     # 📐 Grid dimensions ──────────────────────────────────
-    xdim = 96                                 # number of longitude grid points
-    ydim = 48                                 # number of latitude grid points
-    dlon = 360.0 / xdim                       # longitude spacing [degrees]
-    dlat = 180.0 / ydim                       # latitude spacing  [degrees]
+    const xdim = 96                                 # number of longitude grid points
+    const ydim = 48                                 # number of latitude grid points
+    const dlon = 360.0 / xdim                       # longitude spacing [degrees]
+    const dlat = 180.0 / ydim                       # latitude spacing  [degrees]
 
     # ⏱️ Time stepping ────────────────────────────────────
-    ndays_yr = 365                            # days per year (no leap years)
-    Δt = 12 * 3600                            # main time step [s] (12 hours)
-    Δt_crcl = round(Int, 0.5 * 3600)          # circulation sub-time step [s] (30 min)
-    ndt_days = 24 * 3600 / Δt                 # time steps per day
-    nstep_yr = Int(ndays_yr * ndt_days)            # time steps per year (= 730)
-    ntime = max(1, round(Int, Δt / Δt_crcl))  # Number of sub-steps within one main time step
+    const ndays_yr = 365                            # days per year (no leap years)
+    const Δt = 12.0 * 3600.0                        # main time step [s] (12 hours)
+    const Δt_crcl = 1800.0                          # circulation sub-time step [s] (30 min)
+    const ndt_days = Int(round(24 * 3600 / Δt))     # time steps per day
+    const nstep_yr = Int(ndays_yr * ndt_days)       # time steps per year (= 730)
+    const ntime = max(1, Int(round(Δt / Δt_crcl)))  # Number of sub-steps within one main time step
 
     # 📅 Calendar constants ───────────────────────────────
-    jday_mon = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    jday_mon_cumsum = cumsum(jday_mon)
+    const cjday_mon = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    const jday_mon_cumsum = cumsum(cjday_mon)
 
     # 🔢 Physical Constants & Numerical Limits ────────────
-    min_T_K = 233.15       # # 273.15 - 40°C, minimum allowed surface temperature [K]
-    max_humidity_change = 0.020      # Maximum humidity increment [kg/kg]
-    min_humidity_change = 0.9      # Fraction of humidity that can be removed
+    const min_T_K = 233.15              # 273.15 - 40°C, minimum allowed surface temperature [K]
+    const max_humidity_change = 0.020   # Maximum humidity increment [kg/kg]
+    const min_humidity_change = 0.9     # Fraction of humidity that can be removed
 end;
 
 # ── notebook cell 19f106e4-2b82-47e1-9284-799a105f30cb  (orig lines 235-291) ──
@@ -250,11 +250,11 @@ end;
 begin
     # 💧 Optimized Hydrology Parameter Lookup Table ────────────────────────
     const HYDRO_PARAMS = (
-        -1 => (1.0, 0.0, 0.0, 0.0),                      # Original GREB
-        1 => (-1.391649, 3.018774, 0.0, 0.0),         # +Relative humidity
-        2 => (0.862162, 0.0, -29.02096, 0.0),         # +Omega convergence
+        -1 => (1.0, 0.0, 0.0, 0.0),                     # Original GREB
+        1 => (-1.391649, 3.018774, 0.0, 0.0),           # +Relative humidity
+        2 => (0.862162, 0.0, -29.02096, 0.0),           # +Omega convergence
         3 => (-0.2685845, 1.4591853, -26.9858807, 0.0), # +RH & Omega
-        0 => (-1.88, 2.25, -17.69, 59.07)             # Best GREB (ERA-Interim)
+        0 => (-1.88, 2.25, -17.69, 59.07)               # Best GREB (ERA-Interim)
     )
 
     # 🎯 Cached Weight Arrays (avoid recomputation) ───
@@ -309,7 +309,7 @@ begin
         Q_sens_buf::Matrix{Float64} # Sensible heat flux buffer
         eva::Matrix{Float64}        # dq_eva
         rain::Matrix{Float64}       # dq_rain
-        crcl::Matrix{Float64}     # dq_crcl
+        crcl::Matrix{Float64}       # dq_crcl
 
         # State buffers
         Ts0_buf::Matrix{Float64}    # Surface temperature output
@@ -356,8 +356,8 @@ begin
         precip_out::Matrix{Float64}   # precipitation output
         evap_out::Matrix{Float64}     # evaporation output
         qcrcl_out::Matrix{Float64}    # circulation moisture output
-        term_north::Vector{Float64}      # northern boundary term
-        term_south::Vector{Float64}      # southern boundary term
+        term_north::Vector{Float64}   # northern boundary term
+        term_south::Vector{Float64}   # southern boundary term
     end
 
     function CirculationWorkspace()
@@ -370,8 +370,8 @@ begin
             zeros(Float64, xdim, ydim),# dX_conv
             zeros(Float64, xdim, ydim),# dX_crcl
             zeros(Float64, xdim, ydim),# temp_buf
-            zeros(Float64, xdim, ydim), # Q_sens_buf
-            zeros(Float64, xdim, ydim), # rain	
+            zeros(Float64, xdim, ydim),# Q_sens_buf
+            zeros(Float64, xdim, ydim),# rain	
             zeros(Float64, xdim, ydim),# eva
             zeros(Float64, xdim, ydim),# crcl
             # State buffers
@@ -408,7 +408,7 @@ begin
             zeros(Float64, xdim, ydim),  # a_surf_buf
             zeros(Float64, xdim, ydim),  # albedo_buf
             zeros(Float64, xdim, ydim),  # a_atmos_buf
-            zeros(Float64, xdim, ydim),   # sw_buf
+            zeros(Float64, xdim, ydim),  # sw_buf
             # time_loop
             zeros(Float64, xdim, ydim),  # precip_out
             zeros(Float64, xdim, ydim),  # evap_out
@@ -511,86 +511,86 @@ end;
 # ── notebook cell f8a2c2de-5045-4ab6-a6fa-7bca502afc9b  (orig lines 644-658) ──
 begin
     # ── Natural constants ────────────────────────────────────────────
-    const_pi = pi               # π (model precision)
-    σ = 5.6704e-8        # Stefan-Boltzmann constant [W/m²/K⁴]
-    ρ_ocean = 999.1            # density of water at T=15°C [kg/m³]
-    ρ_land = 2600.0           # density of solid rock [kg/m³]
-    ρ_air = 1.2              # density of air at 20°C at sea 
-    grav = 9.80665          # gravitational acceleration [m/s²]
-    cp_ocean = 4186.0           # specific heat of water at T=15°C [J/kg/K]
-    cp_land = cp_ocean / 4.5   # specific heat of dry land [J/kg/K]
-    cp_air = 1005.0           # specific heat of air [J/kg/K]
-    ε = 1.0              # emissivity for IR
+    const const_pi = pi            # π (model precision)
+    const σ = 5.6704e-8            # Stefan-Boltzmann constant [W/m²/K⁴]
+    const ρ_ocean = 999.1          # density of water at T=15°C [kg/m³]
+    const ρ_land = 2600.0          # density of solid rock [kg/m³]
+    const ρ_air = 1.2              # density of air at 20°C at sea 
+    const grav = 9.80665           # gravitational acceleration [m/s²]
+    const cp_ocean = 4186.0        # specific heat of water at T=15°C [J/kg/K]
+    const cp_land = cp_ocean / 4.5 # specific heat of dry land [J/kg/K]
+    const cp_air = 1005.0          # specific heat of air [J/kg/K]
+    const ε = 1.0                  # emissivity for IR
 end;
 
 # ── notebook cell b23bc922-e9bc-4012-9782-1258e3cc8e7b  (orig lines 659-736) ──
 begin
     # ── Column depths [m] ───────────────────────────────────────────
-    d_ocean = 50.0                        # ocean column
-    d_land = 2.0                         # land column 
-    d_air = 5000.0                      # air column 
+    const d_ocean = 50.0                        # ocean column
+    const d_land = 2.0                          # land column 
+    const d_air = 5000.0                        # air column 
 
     # ── Heat capacities [J/K/m²] ────────────────────────────────────
-    cap_ocean = cp_ocean * ρ_ocean          # 1m ocean
-    cap_land = cp_land * ρ_land * d_land   # land column
-    cap_air = cp_air * ρ_air * d_air      # air column 
+    const cap_ocean = cp_ocean * ρ_ocean        # 1m ocean
+    const cap_land = cp_land * ρ_land * d_land  # land column
+    const cap_air = cp_air * ρ_air * d_air      # air column
 
     # ── Sensible heat [W/K/m²] ──────────────────────────────────────
-    ct_sens = 22.5                        # sensible heat coupling 
+    const ct_sens = 22.5                        # sensible heat coupling
 
     # ── Albedo parameters ───────────────────────────────────────────
-    da_ice = 0.25                       # albedo increase for ice-cover
-    a_no_ice = 0.1                        # albedo ice-free
-    a_cloud = 0.35                       # cloud albedo
+    const da_ice = 0.25                         # albedo increase for ice-cover
+    const a_no_ice = 0.1                        # albedo ice-free
+    const a_cloud = 0.35                        # cloud albedo
 
     # ── Ice/snow temperature thresholds [K] ─────────────────────────
-    Tl_ice1 = 273.15 - 10.0                 # land: full ice albedo
-    Tl_ice2 = 273.15                        # land: no ice albedo
-    To_ice1 = 273.15 - 7.0                  # ocean: full ice
-    To_ice2 = 273.15 - 1.7                  # ocean: no ic
+    const Tl_ice1 = 273.15 - 10.0               # land: full ice albedo
+    const Tl_ice2 = 273.15                      # land: no ice albedo
+    const To_ice1 = 273.15 - 7.0                # ocean: full ice
+    const To_ice2 = 273.15 - 1.7                # ocean: no ic
 
     # Precomputed inverse ranges (avoids division in hot loops)
-    inv_To_ice_range = 1.0 / (To_ice2 - To_ice1)
-    inv_Tl_ice_range = 1.0 / (Tl_ice2 - Tl_ice1)
+    const inv_To_ice_range = 1.0 / (To_ice2 - To_ice1)
+    const inv_Tl_ice_range = 1.0 / (Tl_ice2 - Tl_ice1)
 
     # ── Deep ocean ──────────────────────────────────────────────────
-    co_turb = 5.0                        # turbulent mixing coefficient [W/K/m²]
-    c_effmix = 0.5   # mixing efficiency
-    turb_coeff = Δt * co_turb / cap_ocean  # precomputed mixing coefficient
+    const co_turb = 5.0                          # turbulent mixing coefficient [W/K/m²]
+    const c_effmix = 0.5                         # mixing efficiency
+    const turb_coeff = Δt * co_turb / cap_ocean  # precomputed mixing coefficient
 
     # ── Atmospheric transport ───────────────────────────────────────
-    κ = 8e5                        # diffusion coefficient [m²/s]
+    const κ = 8e5                          # diffusion coefficient [m²/s]
 
     # ── Latent heat / hydrology ─────────────────────────────────────
-    ce = 2e-3                   # latent heat transfer coefficient
-    cq_latent = 2.257e6                # latent heat of evaporation [J/kg]
-    cq_rain = -0.1 / 24.0 / 3600.0   # rain-related vapor decrease [1/s]
+    const ce = 2e-3                        # latent heat transfer coefficient
+    const cq_latent = 2.257e6              # latent heat of evaporation [J/kg]
+    const cq_rain = -0.1 / 24.0 / 3600.0   # rain-related vapor decrease [1/s]
 
     # ── Scaling heights [m] ─────────────────────────────────────────
-    z_air = 8400.0                 # heat & CO₂ scaling height
-    z_vapor = 5000.0                 # water vapor scaling height
-    const_factor = Δt_crcl / z_vapor * 2.5 / (ρ_air * grav) # precompute
+    const z_air = 8400.0                   # heat & CO₂ scaling height
+    const z_vapor = 5000.0                 # water vapor scaling height
+    const const_factor = Δt_crcl / z_vapor * 2.5 / (ρ_air * grav) 
 
     # ── Regression factor [kg/m³] ───────────────────────────────────
-    r_qviwv = 2.6736e3               # VIWV ↔ q_air regression factor
-    conv_factor = r_qviwv * 86400.0   # kg/kg → mm/day conversion
+    const r_qviwv = 2.6736e3               # VIWV ↔ q_air regression factor
+    const conv_factor = r_qviwv * 86400.0  # kg/kg → mm/day conversion
 
     # ── solar factor [%] ────────────────────────────────────────────
-    S0_var = 100.0          # default 100%
+    const S0_var = 100.0          # default 100%
 
     # ── transport geometry & coefficients ───────────────────────────
-    deg_grid = 2.0 * const_pi * 6.371e6 / 360.0
-    dyy_grid = dlat * deg_grid
-    lat_grid = [dlat * k - dlat / 2.0 - 90.0 for k in 1:ydim]
-    dxlat_grid = [dlon * deg_grid * cos(2.0 * const_pi / 360.0 * lat_grid[k]) for k in 1:ydim]
+    const deg_grid = 2.0 * const_pi * 6.371e6 / 360.0
+    const dyy_grid = dlat * deg_grid
+    const lat_grid = [dlat * k - dlat / 2.0 - 90.0 for k in 1:ydim]
+    const dxlat_grid = [dlon * deg_grid * cos(2.0 * const_pi / 360.0 * lat_grid[k]) for k in 1:ydim]
 
     # ── Diffusion coefficients ──────────────────────────────────────
-    ccy_diff = κ * Δt_crcl / dyy_grid^2
-    ccx_diff = [κ * Δt_crcl / dxlat_grid[k]^2 for k in 1:ydim]
+    const ccy_diff = κ * Δt_crcl / dyy_grid^2
+    const ccx_diff = [κ * Δt_crcl / dxlat_grid[k]^2 for k in 1:ydim]
 
     # ── Advection coefficients ──────────────────────────────────────
-    ccy_adv = Δt_crcl / dyy_grid / 2.0
-    ccx_adv = [Δt_crcl / dxlat_grid[k] / 2.0 for k in 1:ydim]
+    const ccy_adv = Δt_crcl / dyy_grid / 2.0
+    const ccx_adv = [Δt_crcl / dxlat_grid[k] / 2.0 for k in 1:ydim]
 
     # ── periodic longitude neighbour indices ───────────────────────
     const lon_jm1 = [mod1(i-1, xdim) for i in 1:xdim]
@@ -638,8 +638,8 @@ function load_flux_corrections_jdal2!(jdal2_dir::String)
 end
 
 # ── notebook cell 898dd5aa-5273-4833-9a4a-0f2b94cc8d38  (orig lines 779-782) ──
-p_emi = [9.0721, 106.7252, 61.5562, 0.0179, 0.0028,
-    0.0570, 0.3462, 2.3406, 0.7032, 1.0662]
+const p_emi = [9.0721, 106.7252, 61.5562, 0.0179, 0.0028,
+               0.0570, 0.3462, 2.3406, 0.7032, 1.0662]
 
 # ── notebook cell 75f3b78f-924a-4a65-b2e3-a79c6f2082f9  (orig lines 814-824) ──
 begin
@@ -1337,9 +1337,9 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
 
     # ----- Precompute k‑independent terms for the poles -----
     # For k == 1 (North Pole)
-    @. ws.term_north = ccy * wz[:, 2] * (T1[:, 2] - T1[:, 1])
+    @view @. ws.term_north = ccy * wz[:, 2] * (T1[:, 2] - T1[:, 1])
     # For k == ydim (South Pole)
-    @. ws.term_south = ccy * wz[:, ydim-1] * (T1[:, ydim-1] - T1[:, ydim])
+    @view @. ws.term_south = ccy * wz[:, ydim-1] * (T1[:, ydim-1] - T1[:, ydim])
 
     for k in 1:ydim
         # ----- Meridional diffusion -----
@@ -1353,7 +1353,7 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
             end
         else
             # Mid‑latitudes: no precomputation possible (depends on k‑1, k+1)
-            @. ws.dX_diff[:, k] += wz[:, k] * ccy * (
+            @view @. ws.dX_diff[:, k] += wz[:, k] * ccy * (
                 wz[:, k-1] * (T1[:, k-1] - T1[:, k]) +
                 wz[:, k+1] * (T1[:, k+1] - T1[:, k])
             )
@@ -1421,8 +1421,8 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
                 end
             end
 
-            # Add total change (scaled by outer wz) to output buffer – use broadcast
-            @. ws.dX_diff[:, k] += wz[:, k] * (ws.T1h - T1[:, k])
+            # Add total change (scaled by outer wz) to output buffer
+            @view @. ws.dX_diff[:, k] += wz[:, k] * (ws.T1h - T1[:, k])
         end
     end
 
@@ -1566,7 +1566,7 @@ function advection!(T1, h_scl, ws::CirculationWorkspace, timestate, cfg::Physics
             end
 
             # Add total change to the output buffer
-            @. ws.dX_adv[:, k] += ws.T1h - T1[:, k]
+            @view  @. ws.dX_adv[:, k] += ws.T1h - T1[:, k]
         end
     end
 
@@ -1655,7 +1655,7 @@ function tendencies!(CO2, Ts, Ta, To, q, ws::CirculationWorkspace,
 end
 
 # ── notebook cell 1894ad94-cdf8-4e79-a0e5-b72088db31be  (orig lines 2162-2343) ──
-function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl=zeros(xdim, ydim, 12); nstep_yr=nstep_yr)
+function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
     CO2 = cfg.co2_concentration
     sw_solar_forcing = 1.0
