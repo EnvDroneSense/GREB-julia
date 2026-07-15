@@ -202,27 +202,27 @@ Calendar arrays track days per month for output functions.
 # ╔═╡ 531589ab-c6b5-4048-9ba5-f9ad62ab00a6
 begin
 	# 📐 Grid dimensions ──────────────────────────────────
-	xdim = 96                                 # number of longitude grid points
-	ydim = 48                                 # number of latitude grid points
-	dlon = 360.0 / xdim                       # longitude spacing [degrees]
-	dlat = 180.0 / ydim                       # latitude spacing  [degrees]
+	const xdim = 96                                # number of longitude grid points
+	const ydim = 48                                # number of latitude grid points
+	const dlon = 360.0 / xdim                      # longitude spacing [degrees]
+	const dlat = 180.0 / ydim                      # latitude spacing  [degrees]
 
 	# ⏱️ Time stepping ────────────────────────────────────
-	ndays_yr = 365                            # days per year (no leap years)
-	Δt = 12 * 3600                            # main time step [s] (12 hours)
-	Δt_crcl = round(Int, 0.5 * 3600)          # circulation sub-time step [s] (30 min)
-	ndt_days = 24 * 3600 / Δt                 # time steps per day
-	nstep_yr = Int(ndays_yr * ndt_days)            # time steps per year (= 730)
-	ntime = max(1, round(Int, Δt / Δt_crcl))  # Number of sub-steps within one main time step
+	const ndays_yr = 365                           # days per year (no leap years)
+	const Δt = 12.0 * 3600.0                       # main time step [s] (12 hours)
+	const Δt_crcl = 1800.0                         # circulation sub-time step [s] (30 min)
+	const ndt_days = Int(round(24 * 3600 / Δt))    # time steps per day
+	const nstep_yr = Int(ndays_yr * ndt_days)      # time steps per year (= 730)
+	const ntime = max(1, Int(round(Δt / Δt_crcl))) # Number of sub-steps within one main time step
 
 	# 📅 Calendar constants ───────────────────────────────
-	jday_mon = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-	jday_mon_cumsum = cumsum(jday_mon)
+	const jday_mon = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+	const jday_mon_cumsum = cumsum(jday_mon)
 	
 	# 🔢 Physical Constants & Numerical Limits ────────────
-	min_T_K = 233.15       # # 273.15 - 40°C, minimum allowed surface temperature [K]
-	max_humidity_change = 0.020      # Maximum humidity increment [kg/kg]
-	min_humidity_change = 0.9      # Fraction of humidity that can be removed
+	const min_T_K = 233.15       # # 273.15 - 40°C, minimum allowed surface temperature [K]
+	const max_humidity_change = 0.020  # Maximum humidity increment [kg/kg]
+	const min_humidity_change = 0.9    # Fraction of humidity that can be removed
 end;
 
 # ╔═╡ 813d59f7-eeea-402a-96e8-e5cbe2fd4582
@@ -364,11 +364,11 @@ Optimized parameter system with lookup table for different parameterization mode
 begin
 	# 💧 Optimized Hydrology Parameter Lookup Table ────────────────────────
 	const HYDRO_PARAMS = (
-		-1 => (1.0, 0.0, 0.0, 0.0),                      # Original GREB
-		 1 => (-1.391649, 3.018774, 0.0, 0.0),        	 # +Relative humidity
-		 2 => (0.862162, 0.0, -29.02096, 0.0),        	 # +Omega convergence
-		 3 => (-0.2685845, 1.4591853, -26.9858807, 0.0), # +RH & Omega
-		 0 => (-1.88, 2.25, -17.69, 59.07)            	 # Best GREB (ERA-Interim)
+     	-1 => (1.0, 0.0, 0.0, 0.0),                      # Original GREB
+			 1 => (-1.391649, 3.018774, 0.0, 0.0),        	 # +Relative humidity
+          2 => (0.862162, 0.0, -29.02096, 0.0),           # +Omega convergence
+	       3 => (-0.2685845, 1.4591853, -26.9858807, 0.0), # +RH & Omega
+		   0 => (-1.88, 2.25, -17.69, 59.07)               # Best GREB (ERA-Interim)
 	)     
 	
 	# 🎯 Cached Weight Arrays (avoid recomputation) ───
@@ -644,86 +644,86 @@ Fundamental physical constants used throughout the model.
 # ╔═╡ f8a2c2de-5045-4ab6-a6fa-7bca502afc9b
 begin
 	# ── Natural constants ────────────────────────────────────────────
-	const_pi   = pi               # π (model precision)
-	σ          = 5.6704e-8        # Stefan-Boltzmann constant [W/m²/K⁴]
-	ρ_ocean    = 999.1            # density of water at T=15°C [kg/m³]
-	ρ_land     = 2600.0           # density of solid rock [kg/m³]
-	ρ_air      = 1.2              # density of air at 20°C at sea 
-	grav       = 9.80665          # gravitational acceleration [m/s²]
-	cp_ocean   = 4186.0           # specific heat of water at T=15°C [J/kg/K]
-	cp_land    = cp_ocean / 4.5   # specific heat of dry land [J/kg/K]
-	cp_air     = 1005.0           # specific heat of air [J/kg/K]
-	ε          = 1.0              # emissivity for IR
+	const const_pi   = pi               # π (model precision)
+	const σ          = 5.6704e-8        # Stefan-Boltzmann constant [W/m²/K⁴]
+	const ρ_ocean    = 999.1            # density of water at T=15°C [kg/m³]
+	const ρ_land     = 2600.0           # density of solid rock [kg/m³]
+	const ρ_air      = 1.2              # density of air at 20°C at sea 
+	const grav       = 9.80665          # gravitational acceleration [m/s²]
+	const cp_ocean   = 4186.0           # specific heat of water at T=15°C [J/kg/K]
+	const cp_land    = cp_ocean / 4.5   # specific heat of dry land [J/kg/K]
+	const cp_air     = 1005.0           # specific heat of air [J/kg/K]
+	const ε          = 1.0              # emissivity for IR
 end;
 
 # ╔═╡ b23bc922-e9bc-4012-9782-1258e3cc8e7b
 begin
 	# ── Column depths [m] ───────────────────────────────────────────
-	d_ocean   = 50.0                        # ocean column
-	d_land    = 2.0                         # land column 
-	d_air     = 5000.0                      # air column 
+	const d_ocean   = 50.0                      # ocean column
+	const d_land    = 2.0                       # land column 
+	const d_air     = 5000.0                    # air column 
 
 	# ── Heat capacities [J/K/m²] ────────────────────────────────────
-	cap_ocean = cp_ocean * ρ_ocean          # 1m ocean
-	cap_land  = cp_land * ρ_land * d_land   # land column
-	cap_air   = cp_air * ρ_air * d_air      # air column 
+	const cap_ocean = cp_ocean * ρ_ocean          # 1m ocean
+	const cap_land  = cp_land * ρ_land * d_land   # land column
+	const cap_air   = cp_air * ρ_air * d_air      # air column 
 
 	# ── Sensible heat [W/K/m²] ──────────────────────────────────────
-	ct_sens   = 22.5                        # sensible heat coupling 
+	const ct_sens   = 22.5                      # sensible heat coupling 
 
 	# ── Albedo parameters ───────────────────────────────────────────
-	da_ice    = 0.25                       # albedo increase for ice-cover
-	a_no_ice  = 0.1                        # albedo ice-free
-	a_cloud   = 0.35                       # cloud albedo
+	const da_ice    = 0.25                      # albedo increase for ice-cover
+	const a_no_ice  = 0.1                       # albedo ice-free
+	const a_cloud   = 0.35                      # cloud albedo
 
 	# ── Ice/snow temperature thresholds [K] ─────────────────────────
-	Tl_ice1 = 273.15 - 10.0                 # land: full ice albedo
-    Tl_ice2 = 273.15                        # land: no ice albedo
-    To_ice1 = 273.15 - 7.0                  # ocean: full ice
-    To_ice2 = 273.15 - 1.7                  # ocean: no ic
+	const Tl_ice1 = 273.15 - 10.0               # land: full ice albedo
+    const Tl_ice2 = 273.15                      # land: no ice albedo
+    const To_ice1 = 273.15 - 7.0                # ocean: full ice
+    const To_ice2 = 273.15 - 1.7                # ocean: no ic
 	
 	# Precomputed inverse ranges (avoids division in hot loops)
-	inv_To_ice_range = 1.0 / (To_ice2 - To_ice1)
-	inv_Tl_ice_range = 1.0 / (Tl_ice2 - Tl_ice1)
+	const inv_To_ice_range = 1.0 / (To_ice2 - To_ice1)
+	const inv_Tl_ice_range = 1.0 / (Tl_ice2 - Tl_ice1)
 
 	# ── Deep ocean ──────────────────────────────────────────────────
-	co_turb   = 5.0                        # turbulent mixing coefficient [W/K/m²]
-	c_effmix  = 0.5						   # mixing efficiency
-	turb_coeff = Δt * co_turb / cap_ocean  # precomputed mixing coefficient
+	const co_turb   = 5.0                     # turbulent mixing coefficient [W/K/m²]
+	const c_effmix  = 0.5					    # mixing efficiency
+	const turb_coeff = Δt * co_turb / cap_ocean # precomputed mixing coefficient
 
 	# ── Atmospheric transport ───────────────────────────────────────
-	κ = 8e5                        # diffusion coefficient [m²/s]
+	const κ = 8e5                        # diffusion coefficient [m²/s]
 
 	# ── Latent heat / hydrology ─────────────────────────────────────
-	ce        = 2e-3                   # latent heat transfer coefficient
-	cq_latent = 2.257e6                # latent heat of evaporation [J/kg]
-	cq_rain   = -0.1 / 24.0 / 3600.0   # rain-related vapor decrease [1/s]
+	const ce        = 2e-3                   # latent heat transfer coefficient
+	const cq_latent = 2.257e6                # latent heat of evaporation [J/kg]
+	const cq_rain   = -0.1 / 24.0 / 3600.0   # rain-related vapor decrease [1/s]
 
 	# ── Scaling heights [m] ─────────────────────────────────────────
-	z_air     = 8400.0                 # heat & CO₂ scaling height
-	z_vapor   = 5000.0                 # water vapor scaling height
-	const_factor = Δt_crcl / z_vapor * 2.5 / (ρ_air * grav) # precompute
+	const z_air     = 8400.0                 # heat & CO₂ scaling height
+	const z_vapor   = 5000.0                 # water vapor scaling height
+	const const_factor = Δt_crcl / z_vapor * 2.5 / (ρ_air * grav) 
 
 	# ── Regression factor [kg/m³] ───────────────────────────────────
-	r_qviwv   = 2.6736e3               # VIWV ↔ q_air regression factor
-	conv_factor = r_qviwv * 86400.0	   # kg/kg → mm/day conversion
+	const r_qviwv   = 2.6736e3               # VIWV ↔ q_air regression factor
+	const conv_factor = r_qviwv * 86400.0	 # kg/kg → mm/day conversion
 
 	# ── solar factor [%] ────────────────────────────────────────────
-	S0_var = 100.0  		     	   # default 100%
+	const S0_var = 100.0  		     	     # default 100%
 
 	# ── transport geometry & coefficients ───────────────────────────
-	deg_grid  = 2.0 * const_pi * 6.371e6 / 360.0
-	dyy_grid  = dlat * deg_grid
-	lat_grid  = [dlat * k - dlat / 2.0 - 90.0 for k in 1:ydim]
-	dxlat_grid = [dlon * deg_grid * cos(2.0 * const_pi / 360.0 * lat_grid[k]) for k in 1:ydim]
+	const deg_grid  = 2.0 * const_pi * 6.371e6 / 360.0
+	const dyy_grid  = dlat * deg_grid
+	const lat_grid  = [dlat * k - dlat / 2.0 - 90.0 for k in 1:ydim]
+	const dxlat_grid = [dlon * deg_grid * cos(2.0 * const_pi / 360.0 * lat_grid[k]) for k in 1:ydim]
 
 	# ── Diffusion coefficients ──────────────────────────────────────
-	ccy_diff  = κ * Δt_crcl / dyy_grid^2
-	ccx_diff  = [κ * Δt_crcl / dxlat_grid[k]^2 for k in 1:ydim]
+	const ccy_diff  = κ * Δt_crcl / dyy_grid^2
+	const ccx_diff  = [κ * Δt_crcl / dxlat_grid[k]^2 for k in 1:ydim]
 	
 	# ── Advection coefficients ──────────────────────────────────────
-	ccy_adv   = Δt_crcl / dyy_grid / 2.0
-	ccx_adv   = [Δt_crcl / dxlat_grid[k] / 2.0 for k in 1:ydim]
+	const ccy_adv   = Δt_crcl / dyy_grid / 2.0
+	const ccx_adv   = [Δt_crcl / dxlat_grid[k] / 2.0 for k in 1:ydim]
 
 	# ── periodic longitude neighbour indices ───────────────────────
 	const lon_jm1 = [mod1(i-1, xdim) for i in 1:xdim]
@@ -777,8 +777,8 @@ md"""
 """
 
 # ╔═╡ 898dd5aa-5273-4833-9a4a-0f2b94cc8d38
-p_emi = [9.0721, 106.7252, 61.5562, 0.0179, 0.0028,
-         0.0570,   0.3462,  2.3406, 0.7032, 1.0662]
+const p_emi = [9.0721, 106.7252, 61.5562, 0.0179, 0.0028,
+               0.0570,   0.3462,  2.3406, 0.7032, 1.0662]
 
 # ╔═╡ 78605b5f-b03d-4851-b339-aea63bad3688
 md"""
@@ -1001,6 +1001,8 @@ begin
 end;
 
 # ╔═╡ 698a990b-cd78-43a1-a747-e79102767d62
+# ╠═╡ skip_as_script = true
+#=╠═╡
 begin
 	using BenchmarkTools, Profile, ProfileSVG
 # Create test data for benchmarking
@@ -1048,6 +1050,7 @@ end
 # Setup once
 bench_data = setup_benchmark()
 end;
+  ╠═╡ =#
 
 # ╔═╡ d403b01e-7d9f-4778-813d-bbbb0bfdbfb9
 md"""
@@ -1178,7 +1181,7 @@ This replaces the Fortran direct-access binary writes to units 21/22.
 
 # ╔═╡ 7a06bf0d-a61c-4d28-b144-2725fe90ae62
 # Type alias for one monthly output record
-const MonthlyRecord = NamedTuple{(:Ts, :Ta, :To, :q, :albedo, :ice, :precip, :evap, :qcrcl, :sw, :lw, :qlat, :qsens), NTuple{13, Matrix{Float64}}};
+const MonthlyRecord = NamedTuple{(:Ts, :Ta, :To, :q, :albedo, :ice, :precip, :evap,            :qcrcl, :sw, :lw, :qlat, :qsens), NTuple{13, Matrix{Float64}}};
 
 # ╔═╡ 3beff4df-89da-4f25-a0e4-be03048c5f2c
 md"""
@@ -1800,9 +1803,9 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
 
     # ----- Precompute k‑independent terms for the poles -----
     # For k == 1 (North Pole)
-    @. ws.term_north = ccy * wz[:, 2] * (T1[:, 2] - T1[:, 1])
+    @views @. ws.term_north = ccy * wz[:, 2] * (T1[:, 2] - T1[:, 1])
     # For k == ydim (South Pole)
-    @. ws.term_south = ccy * wz[:, ydim-1] * (T1[:, ydim-1] - T1[:, ydim])
+    @views @. ws.term_south = ccy * wz[:, ydim-1] * (T1[:, ydim-1] - T1[:, ydim])
 
     for k in 1:ydim
         # ----- Meridional diffusion -----
@@ -1816,7 +1819,7 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
         end
         else
             # Mid‑latitudes: no precomputation possible (depends on k‑1, k+1)
-            @. ws.dX_diff[:, k] += wz[:, k] * ccy * (
+            @views @. ws.dX_diff[:, k] += wz[:, k] * ccy * (
                 wz[:, k-1] * (T1[:, k-1] - T1[:, k]) +
                 wz[:, k+1] * (T1[:, k+1] - T1[:, k])
             )
@@ -1879,7 +1882,7 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
             end
 
             # Add total change (scaled by outer wz) to output buffer – use broadcast
-            @. ws.dX_diff[:, k] += wz[:, k] * (ws.T1h - T1[:, k])
+            @views @. ws.dX_diff[:, k] += wz[:, k] * (ws.T1h - T1[:, k])
         end
     end
 
@@ -2037,7 +2040,7 @@ function advection!(T1, h_scl, ws::CirculationWorkspace, timestate, cfg::Physics
             end
 
             # Add total change to the output buffer
-            @. ws.dX_adv[:, k] += ws.T1h - T1[:, k]
+            @views @. ws.dX_adv[:, k] += ws.T1h - T1[:, k]
         end
     end
 
@@ -2160,7 +2163,7 @@ Returns `(CO2, sw_solar_forcing)` for the current year/time step based on experi
 """
 
 # ╔═╡ 1894ad94-cdf8-4e79-a0e5-b72088db31be
-function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl=zeros(xdim,ydim,12); nstep_yr=nstep_yr)
+function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
 	# Default CO₂ concentration
 	CO2 = cfg.co2_concentration
 	sw_solar_forcing = 1.0
@@ -3181,6 +3184,7 @@ begin
 end
 
 # ╔═╡ b0d6a9e3-5c3a-4408-ab87-1067c2dfaeb7
+#=╠═╡
 begin
     if @isdefined(last_run) && !isnothing(last_run) && !isempty(last_run.ctrl)
         println("="^50)
@@ -3215,6 +3219,7 @@ begin
         println("   Set time_ctrl >= 1 and toggle run_toggle ON")
     end
 end
+  ╠═╡ =#
 
 # ╔═╡ a9089bf1-3241-4038-81d6-b953a00c3cef
 md"""
@@ -3333,54 +3338,163 @@ begin
 end
   ╠═╡ =#
 
-# ╔═╡ 99b335e7-b28a-44f2-a07d-a84c16366710
-# ╠═╡ disabled = true
+# ╔═╡ d571c448-cea6-49c0-81a4-2376e4fc3f67
+# ╠═╡ skip_as_script = true
 #=╠═╡
 begin
-# 1. Profile tendencies! with your benchmark data
-@profile for i in 1:10
-    tendencies!(bench_data.CO2, bench_data.Ts, bench_data.Ta, bench_data.To, 
+### 📊 Comprehensive Performance Profiling Report (full width, high samples)
+# Run this after the benchmark setup (bench_data must exist).
+# This will take ~2‑3 minutes – be patient.
+
+if !@isdefined(bench_data)
+    error("bench_data not defined. Please run the benchmark setup cell first.")
+end
+
+println("Warming up...")
+for _ in 1:10
+    tendencies!(bench_data.CO2, bench_data.Ts, bench_data.Ta, bench_data.To,
                 bench_data.q, bench_data.ws, bench_data.timestate, bench_data.cfg)
 end
 
-# 2. Flat profile (function-level)
-println("\n=== FLAT PROFILE (function-level) ===")
-Profile.print(format=:flat, mincount=10, C=false)
+# -------- CPU Profile (time) – 500 iterations --------
+println("Running CPU profile (500 iterations)...")
+Profile.clear()
+@profile for _ in 1:500
+    tendencies!(bench_data.CO2, bench_data.Ts, bench_data.Ta, bench_data.To,
+                bench_data.q, bench_data.ws, bench_data.timestate, bench_data.cfg)
+end
 
-# 3. Tree profile (call hierarchy) - MORE USEFUL
-println("\n=== TREE PROFILE (call hierarchy) ===")
-Profile.print(format=:tree, mincount=10, C=false)
+cpu_io = IOBuffer()
+cpu_ctx = IOContext(cpu_io, :maxwidth => 0)          # full width
+Profile.print(cpu_ctx, format=:tree, mincount=1, C=false)
+cpu_profile = String(take!(cpu_io))
 
-# 4. Allocations profile (find memory hotspots)
-println("\n=== ALLOCATION PROFILE ===")
-Profile.Allocs.@profile sample_rate=1 begin
-    for i in 1:10
-        tendencies!(bench_data.CO2, bench_data.Ts, bench_data.Ta, bench_data.To, 
+# Flat profile (sorted by count) – also full width
+cpu_flat_io = IOBuffer()
+cpu_flat_ctx = IOContext(cpu_flat_io, :maxwidth => 0)
+Profile.print(cpu_flat_ctx, format=:flat, mincount=5, C=false)
+cpu_flat = String(take!(cpu_flat_io))
+
+# -------- Allocation Profile (memory) – 100 iterations --------
+println("Running allocation profile (100 iterations)...")
+Profile.Allocs.@profile sample_rate=0.01 begin
+    for _ in 1:100
+        tendencies!(bench_data.CO2, bench_data.Ts, bench_data.Ta, bench_data.To,
                     bench_data.q, bench_data.ws, bench_data.timestate, bench_data.cfg)
     end
 end
-Profile.Allocs.print(mincount=100)
+
+allocs_io = IOBuffer()
+allocs_ctx = IOContext(allocs_io, :maxwidth => 0)    # full width
+# No maxwidth keyword – width is controlled by IOContext
+Profile.Allocs.print(allocs_ctx, format=:tree, mincount=100)
+allocs_profile = String(take!(allocs_io))
+
+# -------- Benchmark summary --------
+println("Running benchmark...")
+trial = @benchmark tendencies!($bench_data.CO2, $bench_data.Ts, $bench_data.Ta, $bench_data.To,
+                               $bench_data.q, $bench_data.ws, $bench_data.timestate, $bench_data.cfg)
+bench_summary = sprint(show, trial)
+
+# -------- Assemble Markdown report --------
+Markdown.MD([
+    Markdown.Header("Performance Profiling Report (Full Width)", 1),
+    Markdown.Header("Benchmark Summary (per `tendencies!` call)", 2),
+    Markdown.Code(bench_summary, "text"),
+    Markdown.Header("CPU Profile – Flat (sorted by sample count, mincount=5)", 2),
+    Markdown.Code(cpu_flat, "text"),
+    Markdown.Header("CPU Profile – Tree (call hierarchy, mincount=1)", 2),
+    Markdown.Code(cpu_profile, "text"),
+    Markdown.Header("Allocation Profile – Tree (mincount=100)", 2),
+    Markdown.Code(allocs_profile, "text"),
+    Markdown.Header("What to look for", 2),
+    Markdown.MD("""
+    - **Flat profile**: shows which functions have the most samples → primary bottlenecks.
+    - **Tree profile**: shows the call stack, so you see *why* those functions are called.
+    - **Allocation profile**: reveals lines that allocate memory → causes GC overhead.
+    - **Benchmark summary**: average time & memory per call.
+
+    Focus on:
+    - `getindex` / `setindex!` inside loops → non‑contiguous memory access.
+    - `broadcast` / `materialize!` → often creates temporary arrays.
+    - `log`, `exp`, `pow` → expensive math; consider pre‑computation or approximations.
+    - `invokelatest` or `wait` → dynamic dispatch or threading issues.
+    """)
+])
+
+# Save to file (full width, no truncation)
+open("profile_report.txt", "w") do io
+    println(io, "=== BENCHMARK SUMMARY ===\n", bench_summary)
+    println(io, "\n=== CPU FLAT PROFILE ===\n", cpu_flat)
+    println(io, "\n=== CPU TREE PROFILE ===\n", cpu_profile)
+    println(io, "\n=== ALLOCATION PROFILE ===\n", allocs_profile)
+end
+println("\nReport also saved to profile_report.txt")
 end
   ╠═╡ =#
 
-# ╔═╡ d571c448-cea6-49c0-81a4-2376e4fc3f67
-# ╠═╡ disabled = true
+# ╔═╡ 3dd14a9f-130f-4431-a2f3-51df38483a57
 # ╠═╡ skip_as_script = true
 #=╠═╡
-# profile_greb_model_save
-begin
-    profile_cfg = PhysicsConfig(experiment=:full_model)
-    
-    # Run profile and save to file
-    Profile.clear()
-    @profile greb_model!(0, 1, 0, profile_cfg)
-    
-    # Save to file
-    open("greb_profile.txt", "w") do io
-        Profile.print(io, format=:tree, mincount=1, C=false)
+function export_to_netcdf(records::Vector{MonthlyRecord}, filename::String;
+                          lon_shift::Bool = true)  # true → shift to [-180,180]
+    nt = length(records)
+    xdim, ydim = size(records[1].Ts)  # 96, 48
+
+    # Build coordinate arrays
+    dlon = 360.0 / xdim
+    dlat = 180.0 / ydim
+    lon = (0:xdim-1) * dlon .+ dlon/2
+    lat = (1:ydim) .* dlat .- dlat/2 .- 90.0
+
+    if lon_shift
+        lon = mod.(lon .+ 180, 360) .- 180  # wrap to [-180,180]
     end
-    
-    println("Profile saved to greb_profile.txt")
+
+    # Create NetCDF file
+    ds = Dataset(filename, "c")
+    defDim(ds, "lon", xdim)
+    defDim(ds, "lat", ydim)
+    defDim(ds, "time", nt)
+
+    # Write coordinates
+    v = defVar(ds, "lon", Float64, ("lon",))
+    v[:] = lon
+    v = defVar(ds, "lat", Float64, ("lat",))
+    v[:] = lat
+    v = defVar(ds, "time", Float64, ("time",))
+    v[:] = 1:nt  # or use actual dates if available
+
+    # Define all output variables
+    field_names = propertynames(records[1])
+    vars = Dict()
+    for f in field_names
+        vars[f] = defVar(ds, String(f), Float32, ("lon", "lat", "time"),
+                         deflatelevel=1)
+    end
+
+    # Fill data
+    for (t, rec) in enumerate(records)
+        for f in field_names
+            vars[f][:, :, t] = getfield(rec, f)
+        end
+    end
+
+    close(ds)
+    println("Exported to $filename")
+end
+  ╠═╡ =#
+
+# ╔═╡ 5713d5d6-c95f-4a34-b450-c240d4a2148b
+# ╠═╡ skip_as_script = true
+#=╠═╡
+begin
+	# Assume last_run is the output from greb_model!
+ctrl_records = last_run.ctrl
+scnr_records = last_run.scnr
+
+export_to_netcdf(ctrl_records, "greb_control.nc")
+export_to_netcdf(scnr_records, "greb_scenario.nc")
 end
   ╠═╡ =#
 
@@ -4297,7 +4411,8 @@ version = "17.7.0+0"
 # ╟─1229bf7d-204c-41a2-97dd-9d75e79b18ce
 # ╟─426c1511-f912-4e10-9b8b-f858471019bc
 # ╟─50777c8a-ee6f-449b-b704-bba7e9b36490
-# ╟─99b335e7-b28a-44f2-a07d-a84c16366710
 # ╟─d571c448-cea6-49c0-81a4-2376e4fc3f67
+# ╟─3dd14a9f-130f-4431-a2f3-51df38483a57
+# ╟─5713d5d6-c95f-4a34-b450-c240d4a2148b
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
