@@ -1,7 +1,19 @@
+name = "GREB"
+uuid = "128c3379-415a-4bc6-90bd-d536e37a6aec"
+authors = ["Thomas Struys", "Dietmar Dommenget and colleagues (original GREB)"]
+version = "0.1.0"
+
 [deps]
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[compat]
+julia = "1.9"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

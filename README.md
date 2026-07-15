@@ -6,6 +6,22 @@
 A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. This implementation runs in an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook with process isolation capabilities for decomposition experiments.
 
 ---
+> **Repository layout (v0.1):** GREB is now organized as a standard Julia package.
+> The model code lives in `src/GREB.jl` (a `module GREB`, extracted **verbatim**
+> from the notebook), tests in `test/`, a plain-Julia driver in
+> `examples/run_greb.jl`, and the original interactive Pluto notebook — unchanged —
+> in `notebooks/GREB_julia.jl`.
+>
+> ```julia
+> julia --project=.                 # activate the package env
+> using GREB
+> cfg = create_experiment_config(:full_model)
+> load_greb_jdal2!("greb_dataset_jdal2"; dataset=:ncep)
+> result = greb_model!(0, 1, 1, cfg)   # (flux, ctrl, scenario) years
+> ```
+> Run the tests with `julia --project=. -e 'using Pkg; Pkg.test()'`, or the full
+> driver with `julia --project=. examples/run_greb.jl <path/to/greb_dataset_jdal2>`.
+
 ## 📖 Table of Contents
 
 - [About the Model](#About-the-Model)
