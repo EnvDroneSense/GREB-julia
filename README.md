@@ -3,7 +3,7 @@
 [![Julia](https://img.shields.io/badge/Julia-1.9+-9558B2?logo=julia)](https://julialang.org/)
 [![Pluto](https://img.shields.io/badge/Pluto-Interactive-purple)](https://github.com/fonsp/Pluto.jl)
 
-A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. This implementation runs in an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook with process isolation capabilities for decomposition experiments.
+A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. It is organized as a standard Julia package, with the original interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook (including process-isolation controls for decomposition experiments) preserved under `notebooks/`.
 
 ---
 > **Repository layout (v0.1):** GREB is now organized as a standard Julia package.
@@ -63,17 +63,24 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/EnvDroneSense/GREB-julia
-cd GREB_julia
+git clone https://github.com/MichielStock/GREB.jl
+cd GREB.jl
+```
+
+Alternatively, install it directly as a package into your own environment:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/MichielStock/GREB.jl")
 ```
 
 ### 2. Install Julia
 
 Requires **Julia 1.9** or later. Download from [julialang.org](https://julialang.org/downloads/).
 
-### 3. Activate the Environment
+### 3. Instantiate the Package Environment
 
-Open Julia and run:
+From the cloned repository, open Julia and run:
 
 ```julia
 using Pkg
@@ -81,25 +88,27 @@ Pkg.activate(".")
 Pkg.instantiate()
 ```
 
-This installs all dependencies from `Project.toml`:
+This installs the package dependencies from `Project.toml`:
 
 | Package | Purpose |
 |:--------|:--------|
-| `PlutoUI` | Interactive controls |
 | `NCDatasets` | NetCDF I/O (optional) |
 | `LoopVectorization` | SIMD performance |
 | `StaticArrays` | Optimized array operations |
-| `BenchmarkTools`, `Profile` | Performance analysis |
 | `Statistics` | Statistical functions |
 
-### 4. Launch Pluto
+### 4. Optional: the Interactive Notebook
+
+The original interactive notebook lives in `notebooks/GREB_julia.jl`. It needs
+[Pluto.jl](https://github.com/fonsp/Pluto.jl) installed in your global
+environment (`Pkg.add("Pluto")`), then:
 
 ```julia
 using Pluto
 Pluto.run()
 ```
 
-Open `GREB_julia.jl` from the Pluto interface.
+Open `notebooks/GREB_julia.jl` from the Pluto interface.
 
 ## 📂 Input Data
 
