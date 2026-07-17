@@ -40,7 +40,7 @@ The General registry's AutoMerge requires `[compat]` entries for **every**
 dependency. This is also just good practice: it protects users from breaking
 upstream releases.
 
-- [ ] Add compat bounds for all four deps, e.g.:
+- [x] Add compat bounds for all four deps:
 
   ```toml
   [compat]
@@ -48,19 +48,17 @@ upstream releases.
   NCDatasets = "0.14"
   StaticArrays = "1"
   Statistics = "1"
-  julia = "1.9"
+  julia = "1.10"
   ```
 
-  Check the currently-resolved versions in `Manifest.toml` and bound to those
-  (semver-compatible caret bounds are the default).
-- [ ] Consider raising `julia = "1.10"` (current LTS) — LoopVectorization support
-      on future Julia versions is a known risk; verify it precompiles on the
-      target version.
-- [ ] Decide: keep `LoopVectorization` or replace `@turbo` with
-      `@inbounds @simd`? LV is a heavy dependency with an uncertain maintenance
-      future. **Recommendation:** keep for now, benchmark the difference in
-      Phase 5, decide then.
-- [ ] Re-resolve and run tests: `julia --project=. -e 'using Pkg; Pkg.update(); Pkg.test()'`.
+  Bounds derived from the resolved versions in `Manifest.toml`
+  (LV 0.12.174, NCDatasets 0.14.15, StaticArrays 1.9.17, Statistics 1.11.1).
+- [x] Consider raising `julia = "1.10"` (current LTS) — **done**; precompiles
+      and tests pass on Julia 1.12.6.
+- [x] Decide: keep `LoopVectorization` or replace `@turbo` with
+      `@inbounds @simd`? **Kept for now** — it precompiles and works on 1.12;
+      benchmark the difference in Phase 5, revisit then.
+- [x] Re-resolve and run tests — `Pkg.update()` + `Pkg.test()`: 31/31 pass.
 
 **Done when:** every `[deps]` entry has a `[compat]` bound and tests pass.
 
