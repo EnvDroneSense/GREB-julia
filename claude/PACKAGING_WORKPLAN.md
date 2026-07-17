@@ -64,7 +64,7 @@ upstream releases.
 
 ---
 
-## Phase 2 — Code hygiene: constants and exports (~2–4 h)
+## Phase 2 — Code hygiene: constants, parameters, and exports (~4–8 h)
 
 The notebook extraction left module-level `begin ... end` blocks defining **bare
 (non-`const`) globals**: `xdim`, `ydim`, `dlon`, `dlat`, `Δt`, `nstep_yr`,
@@ -73,21 +73,78 @@ Only the `lon_j*` index vectors got `const`. Untyped globals defeat type
 inference in every function that reads them — a real performance and correctness
 hazard for a SIMD-optimized model.
 
-- [ ] Sweep `src/GREB.jl` and mark every module-level assignment `const`.
-      Scalars and arrays alike (`const` on an array fixes the *binding*, contents
-      stay mutable — fine for read-only tables).
-- [ ] Run the benchmark suite before/after (`benchmark/benchmarks.jl`) and record
-      the speedup in the PR description.
+### Design: three kinds of "constants", two destinations
+
+Not everything should become `const`, and nothing should become a `Dict` or a
+pile of kwargs (hash lookups in hot loops, no typo checking, no documented
+defaults, and threading dozens of kwargs through the kernel call chain is
+error-prone). Sort every module-level scalar/table into one of:
+
+1. **Natural constants** — `σ`, `grav`, `cp_*`, densities, `const_pi`, `p_emi`.
+   Nobody tunes these → plain `const` module globals.
+2. **Structural constants** — `xdim`, `ydim`, `Δt`, `Δt_crcl`, `nstep_yr`,
+   calendar tables, neighbour-index tables. Array sizes and precomputed lookups
+   depend on them; changing them means changing the code → plain `const`.
+3. **Tunable process parameters** (~20: transport `κ`, exchange coefficients
+   `ct_sens`/`ce`/`co_turb`/`c_effmix`, albedo & ice parameters `da_ice`/
+   `a_no_ice`/`a_cloud`/ice thresholds, scale heights `z_air`/`z_vapor`,
+   hydrology coefficients, `S0_var`, clamp limits) → an **immutable
+   `Base.@kwdef struct ModelParams`** with the current values as documented
+   defaults:
+
+   ```julia
+   Base.@kwdef struct ModelParams
+       κ::Float64       = 8e5     # atmospheric diffusion coefficient [m²/s]
+       ct_sens::Float64 = 22.5    # sensible heat coupling [W/K/m²]
+       ce::Float64      = 2e-3    # latent heat transfer coefficient
+       da_ice::Float64  = 0.25    # albedo increase for ice cover
+       # ...
+   end
+   p = ModelParams(κ = 1e6)       # sensitivity run: tweak one, keep the rest
+   ```
+
+   Field access on a concrete immutable struct compiles to a constant — zero
+   overhead, `@turbo`-compatible (keep the existing pattern of copying fields
+   into locals before hot loops, as `hydro!` does with `cfg.c_q`).
+
+**Derived parameters follow their bases.** `turb_coeff`, `ccx_diff`/`ccy_diff`,
+`ccx_adv`/`ccy_adv`, `const_factor`, `cap_ocean`/`cap_land`/`cap_air`,
+`inv_*_ice_range` are precomputed at module load from tunables — today, tuning
+`κ` would silently leave `ccx_diff` stale. Compute all derived quantities in
+the `ModelParams` inner constructor (or a `derive(p)` builder) so base and
+derived values can never desynchronize. This closes a latent footgun, not just
+a style issue.
+
+**Plumbing:** since `cfg::PhysicsConfig` already reaches every kernel, nest the
+parameters as a field — `params::ModelParams = ModelParams()` inside
+`PhysicsConfig`; kernels read `cfg.params.κ`. No signature changes anywhere.
+(A separate argument is conceptually cleaner — switches vs. numbers — but
+touches every call site; split later only if it earns it.) End state for
+sensitivity studies:
+`greb_model!(...; cfg = PhysicsConfig(params = ModelParams(ce = 2.5e-3)))`
+instead of editing source.
+
+### Tasks (in order — the model stays runnable after each step)
+
+- [ ] Sweep `src/GREB.jl` and mark every module-level assignment `const`
+      (categories 1–3 alike, as a mechanical first step; `const` on an array
+      fixes the *binding*, contents stay mutable — fine for read-only tables).
+      Benchmark before/after with `benchmark/benchmarks.jl`, record the speedup.
+- [ ] Introduce `ModelParams` (with derived quantities in the constructor) and
+      nest it in `PhysicsConfig`. Migrate kernels one at a time — each migrated
+      parameter's `const` global is deleted in the same commit; run tests +
+      benchmarks per kernel.
 - [ ] Trim the export list: stop exporting bare grid constants
       (`xdim`, `ydim`, `nstep_yr`) — users should write `GREB.xdim`. Keep
-      exporting types and model functions.
+      exporting types and model functions. Export `ModelParams`.
 - [ ] Optional: split the 2 250-line `src/GREB.jl` into
       `src/{constants,types,io,physics,circulation,model}.jl` with `include`s
       in `GREB.jl`. Pure file moves, no logic changes. Improves navigability;
       defer if it would disrupt in-flight work.
 
-**Done when:** no non-`const` module-level globals remain; tests + benchmarks pass;
-exports are types & functions only.
+**Done when:** no non-`const` module-level globals remain; tunable parameters
+live in `ModelParams` with derived values computed from bases; tests +
+benchmarks pass; exports are types & functions only.
 
 ---
 
@@ -181,7 +238,7 @@ Julia install.
 |:--|:--|:--|:--|
 | 0 | Housekeeping | 30 min | — |
 | 1 | Compat bounds | 30 min | Registration |
-| 2 | `const` globals + exports | 2–4 h | Performance credibility |
+| 2 | `const` globals + `ModelParams` + exports | 4–8 h | Performance credibility |
 | 3 | CI | 1 h | Everything after it |
 | 4 | Data artifacts + real tests | 3–6 h | Usability by others |
 | 5 | Documenter docs | 2–4 h | — |
