@@ -7,10 +7,11 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 
 ---
 > **Repository layout (v0.1):** GREB is now organized as a standard Julia package.
-> The model code lives in `src/GREB.jl` (a `module GREB`, extracted **verbatim**
-> from the notebook), tests in `test/`, a plain-Julia driver in
-> `examples/run_greb.jl`, and the original interactive Pluto notebook — unchanged —
-> in `notebooks/GREB_julia.jl`.
+> The model code lives under `src/` (a `module GREB`, originally extracted
+> **verbatim** from the notebook and since split into topical files — see
+> `src/GREB.jl` for the include order), tests in `test/`, kernel benchmarks in
+> `benchmark/`, a plain-Julia driver in `examples/run_greb.jl`, and the original
+> interactive Pluto notebook — unchanged — in `notebooks/GREB_julia.jl`.
 >
 > ```julia
 > julia --project=.                 # activate the package env
@@ -85,13 +86,15 @@ This installs all dependencies from `Project.toml`:
 
 | Package | Purpose |
 |:--------|:--------|
-| `PlutoUI` | Interactive controls |
-| `NCDatasets` | NetCDF I/O (optional) |
 | `JLD2` | Reading/writing the model's `.jld2` input data |
 | `LoopVectorization` | SIMD performance |
-| `StaticArrays` | Optimized array operations |
-| `BenchmarkTools`, `Profile` | Performance analysis |
+| `PrecompileTools` | Precompiles hot kernels at build time (faster first run) |
 | `Statistics` | Statistical functions |
+
+The Pluto notebook environment (`notebooks/`) separately depends on `PlutoUI`
+for its interactive controls. Kernel micro-benchmarks live in their own
+environment under `benchmark/` (`BenchmarkTools`) — see
+[claude/BENCHMARKS.md](claude/BENCHMARKS.md).
 
 ### 4. Launch Pluto
 
