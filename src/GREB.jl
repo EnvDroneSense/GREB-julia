@@ -66,8 +66,6 @@ function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::
     elseif forcing_type == :eccentricity
         filepath = joinpath(jld2_dir, "solar_scenarios", "solar_eccentricity.jld2")
         result = read_jld2(filepath)
-        # dim 1 ("ecc_index") is looked up by its stored physical value, not a
-        # hardcoded stride, so this always matches what's actually in the file
         values = Int.(result.coords[1])
         pos = findfirst(==(index), values)
         @assert pos !== nothing "Eccentricity index $index not found in $(values)"
@@ -76,9 +74,6 @@ function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::
     elseif forcing_type == :obliquity
         filepath = joinpath(jld2_dir, "solar_scenarios", "solar_obliquity.jld2")
         result = read_jld2(filepath)
-        # dim 1 ("obl_index") is looked up by its stored physical value, not a
-        # hardcoded stride (the old JDAL2 pipeline hardcoded `0:25:230`, which
-        # only matched 10 of the 47 obliquity files that actually exist on disk)
         values = Int.(result.coords[1])
         pos = findfirst(==(index), values)
         @assert pos !== nothing "Obliquity index $index not found in $(values)"
