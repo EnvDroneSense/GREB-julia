@@ -1,6 +1,9 @@
 # GREB Model Input Data Guide
 
-This document describes the input data required to run the GREB climate model.
+This document describes the **raw** `.bin` input data required to run the GREB
+climate model. The model itself reads a converted `.jld2` dataset (see
+[README.md](README.md#-input-data)) — run `scripts/convert_greb_to_jld2.jl`
+against the raw files described below to produce it.
 
 ## 📁 Data Directory Structure
 

@@ -23,6 +23,7 @@ begin
 	using NCDatasets
 	using StaticArrays  # For optimization: static longitude indices
 	using LoopVectorization  # For SIMD vectorization with @turbo
+	using JLD2
 end
 
 # ╔═╡ 3f63ce64-effd-49c7-9906-92cda40d59f0
@@ -67,72 +68,60 @@ md"""
 
 ### Data Loading Module
 
-Functions to read JDAL2 formatted input files (self-describing binary format with embedded dimensions).
+Functions to read the `.jld2` input files produced by `scripts/convert_greb_to_jld2.jl`
+(standard JLD2 container: each file stores plain Julia values under the keys
+`"data"`, `"dim_names"`, and optionally `"coords"`/`"ctl"`).
 """
 
 # ╔═╡ b303e4e9-49fa-45ad-967e-20f165fdf38c
 """
-    read_jdal2(filepath::String)
+    read_jld2(filepath::String)
 
-Read a JDAL2 Version 2 file into an Array{Float32}.
+Read a `.jld2` field file written by `scripts/convert_greb_to_jld2.jl`.
 
 # Returns
-- `(data, dim_names)` tuple where:
-  - `data`: Array{Float32} with shape determined from file header
+- named tuple `(data, dim_names, coords, ctl)` where:
+  - `data`: Array{Float32} with shape as stored
   - `dim_names`: Vector{String} of dimension names (e.g., ["lon", "lat", "time"])
+  - `coords`: `Dict{Int,Vector{Float64}}` of physical coordinate values per
+    dimension index, or `nothing` if the file has none
+  - `ctl`: raw GrADS `.ctl` metadata text, or `nothing` if the file has none
 """
-function read_jdal2(filepath::String)
-    data, dims, dim_names = open(filepath, "r") do io
-        # Magic bytes
-        magic = UInt8[read(io, UInt8) for _ in 1:6]
-        if magic[1:5] != UInt8[0x4A, 0x44, 0x41, 0x4C, 0x32]
-            error("Not a valid JDAL2 file: $filepath")
-        end
-        version = magic[6]
-        version == 0x02 || error("Only Version 2 supported, got $version")
-        
-        # Dimension names
-        n_dim_names = read(io, Int32)
-        dim_names = [String(read(io, read(io, Int32))) for _ in 1:n_dim_names]
-        
-        # Shape
-        ndims = read(io, Int32)
-        dims = [read(io, Int32) for _ in 1:ndims]
-        
-        # Data type
-        read(io, UInt8) == 0x01 || error("Only Float32 supported")
-        
-        # Data
-        data = Vector{Float32}(undef, prod(dims))
-        read!(io, data)
-        (data, dims, dim_names)
+function read_jld2(filepath::String)
+    jldopen(filepath, "r") do file
+        return (
+            data = file["data"],
+            dim_names = file["dim_names"],
+            coords = haskey(file, "coords") ? file["coords"] : nothing,
+            ctl = haskey(file, "ctl") ? file["ctl"] : nothing,
+        )
     end
-    return (data = reshape(data, Tuple(dims)), dim_names = dim_names)
 end
 
 # ╔═╡ 8578d6aa-2782-4279-8f6b-78194b8ecc10
-function load_solar_forcing_jdal2(jdal2_dir::String, forcing_type::Symbol, index::Int=0)
-    
+function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::Int=0)
+
     if forcing_type == :paleo
-        filepath = joinpath(jdal2_dir, "solar_scenarios", "solar_paleo.jd2")
-        result = read_jdal2(filepath)
+        filepath = joinpath(jld2_dir, "solar_scenarios", "solar_paleo.jld2")
+        result = read_jld2(filepath)
         return result.data
-        
+
     elseif forcing_type == :eccentricity
-        filepath = joinpath(jdal2_dir, "solar_scenarios", "solar_eccentricity.jd2")
-        result = read_jdal2(filepath)
-        # result.data is (61, 48, 730) → index 0-based maps to position index+1
-        @assert 0 <= index <= 60 "Eccentricity index must be 0-60"
-        return result.data[index+1, :, :]
-        
-    elseif forcing_type == :obliquity
-        filepath = joinpath(jdal2_dir, "solar_scenarios", "solar_obliquity.jd2")
-        result = read_jdal2(filepath)
-        indices = 0:25:230
-        pos = findfirst(==(index), indices)
-        @assert pos !== nothing "Obliquity index $index not found in $(indices)"
+        filepath = joinpath(jld2_dir, "solar_scenarios", "solar_eccentricity.jld2")
+        result = read_jld2(filepath)
+        values = Int.(result.coords[1])
+        pos = findfirst(==(index), values)
+        @assert pos !== nothing "Eccentricity index $index not found in $(values)"
         return result.data[pos, :, :]
-        
+
+    elseif forcing_type == :obliquity
+        filepath = joinpath(jld2_dir, "solar_scenarios", "solar_obliquity.jld2")
+        result = read_jld2(filepath)
+        values = Int.(result.coords[1])
+        pos = findfirst(==(index), values)
+        @assert pos !== nothing "Obliquity index $index not found in $(values)"
+        return result.data[pos, :, :]
+
     else
         error("Unknown forcing type: $forcing_type. Use :paleo, :eccentricity, or :obliquity")
     end
@@ -142,18 +131,18 @@ end
 md"""
 ### Solar Forcing Storage
 
-Global variable for orbital/paleoclimate solar forcing. Loaded on-demand using grouped JDAL2 files.
+Global variable for orbital/paleoclimate solar forcing. Loaded on-demand using grouped JLD2 files.
 
 **Usage:**
 ```julia
 # Load eccentricity forcing (index 0-60)
-global sw_solar_forcing_data = load_solar_forcing_jdal2(jdal2_dir, :eccentricity, 36)
+global sw_solar_forcing_data = load_solar_forcing_jld2(jld2_dir, :eccentricity, 36)
 
-# Load obliquity forcing (index from 0:25:230)
-global sw_solar_forcing_data = load_solar_forcing_jdal2(jdal2_dir, :obliquity, 230)
+# Load obliquity forcing
+global sw_solar_forcing_data = load_solar_forcing_jld2(jld2_dir, :obliquity, 230)
 
 # Load paleoclimate forcing
-global sw_solar_forcing_data = load_solar_forcing_jdal2(jdal2_dir, :paleo)
+global sw_solar_forcing_data = load_solar_forcing_jld2(jld2_dir, :paleo)
 ```
 """
 
@@ -748,19 +737,19 @@ begin
 end;
 
 # ╔═╡ f578f25e-047e-4a7e-8483-d544c7b4bec3
-function load_flux_corrections_jdal2!(jdal2_dir::String)
-    """Load flux corrections from JDAL2 files (zeros if missing)"""
+function load_flux_corrections_jld2!(jld2_dir::String)
+    """Load flux corrections from JLD2 files (zeros if missing)"""
     # Correction arrays are already defined as zeros in the global scope.
     correction_files = Dict(
-        "Tsurf_flux_correction.jd2" => TF_correct,
-        "vapour_flux_correction.jd2" => qF_correct,
-        "Tocean_flux_correction.jd2" => ToF_correct
+        "Tsurf_flux_correction.jld2" => TF_correct,
+        "vapour_flux_correction.jld2" => qF_correct,
+        "Tocean_flux_correction.jld2" => ToF_correct
     )
 
     for (filename, array) in correction_files
-        filepath = joinpath(jdal2_dir, "climatology", filename)
+        filepath = joinpath(jld2_dir, "climatology", filename)
         if isfile(filepath)
-            result = read_jdal2(filepath)
+            result = read_jld2(filepath)
             array .= result.data
             println("✅ Loaded $filename")
         else
@@ -875,36 +864,36 @@ begin
 end;
 
 # ╔═╡ 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3
-function load_greb_jdal2!(jdal2_dir::String; dataset::Symbol=:ncep)
-"""Load all GREB input data from JDAL2 formatted files"""
+function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
+"""Load all GREB input data from JLD2 formatted files"""
 
-	if !isdir(jdal2_dir)
-		error("JDAL2 directory not found: $jdal2_dir")
+	if !isdir(jld2_dir)
+		error("JLD2 directory not found: $jld2_dir")
 	end
 
 	# Static 2D files
     println("📂 Loading static fields...")
-    topo_result = read_jdal2(joinpath(jdal2_dir, "static", "global.topography.jd2"))
+    topo_result = read_jld2(joinpath(jld2_dir, "static", "global.topography.jld2"))
     global z_topo .= topo_result.data
-    
-    glacier_result = read_jdal2(joinpath(jdal2_dir, "static", "greb.glaciers.jd2"))
+
+    glacier_result = read_jld2(joinpath(jld2_dir, "static", "greb.glaciers.jld2"))
     global glacier .= glacier_result.data
 
 	# Dataset-specific file mapping
     file_map = Dict(
         :ncep => Dict(
-            "Tclim" => "ncep.tsurf.1948-2007.clim.jd2",
-            "uclim" => "ncep.zonal_wind.850hpa.clim.jd2",
-            "vclim" => "ncep.meridional_wind.850hpa.clim.jd2",
-            "qclim" => "ncep.atmospheric_humidity.clim.jd2",
-            "swetclim" => "ncep.soil_moisture.clim.jd2"
+            "Tclim" => "ncep.tsurf.1948-2007.clim.jld2",
+            "uclim" => "ncep.zonal_wind.850hpa.clim.jld2",
+            "vclim" => "ncep.meridional_wind.850hpa.clim.jld2",
+            "qclim" => "ncep.atmospheric_humidity.clim.jld2",
+            "swetclim" => "ncep.soil_moisture.clim.jld2"
         ),
         :era => Dict(
-            "Tclim" => "erainterim.tsurf.1979-2015.clim.jd2",
-            "uclim" => "erainterim.zonal_wind.850hpa.clim.jd2",
-            "vclim" => "erainterim.meridional_wind.850hpa.clim.jd2",
-            "qclim" => "erainterim.atmospheric_humidity.clim.jd2",
-            "swetclim" => "ncep.soil_moisture.clim.jd2"
+            "Tclim" => "erainterim.tsurf.1979-2015.clim.jld2",
+            "uclim" => "erainterim.zonal_wind.850hpa.clim.jld2",
+            "vclim" => "erainterim.meridional_wind.850hpa.clim.jld2",
+            "qclim" => "erainterim.atmospheric_humidity.clim.jld2",
+            "swetclim" => "ncep.soil_moisture.clim.jld2"
         )
     )
 
@@ -912,67 +901,67 @@ function load_greb_jdal2!(jdal2_dir::String; dataset::Symbol=:ncep)
     files = get(file_map, dataset, file_map[:ncep])
 
 	println("📂 Loading 3D climatology ($dataset dataset)...")
-    climatology_dir = joinpath(jdal2_dir, "climatology")
-    
+    climatology_dir = joinpath(jld2_dir, "climatology")
+
     # Load each variable individually with unique result names
-    tsurf_result = read_jdal2(joinpath(climatology_dir, files["Tclim"]))
+    tsurf_result = read_jld2(joinpath(climatology_dir, files["Tclim"]))
     global Tclim .= tsurf_result.data
-    
-    uwind_result = read_jdal2(joinpath(climatology_dir, files["uclim"]))
+
+    uwind_result = read_jld2(joinpath(climatology_dir, files["uclim"]))
     global uclim .= uwind_result.data
-    
-    vwind_result = read_jdal2(joinpath(climatology_dir, files["vclim"]))
+
+    vwind_result = read_jld2(joinpath(climatology_dir, files["vclim"]))
     global vclim .= vwind_result.data
-    
-    humid_result = read_jdal2(joinpath(climatology_dir, files["qclim"]))
+
+    humid_result = read_jld2(joinpath(climatology_dir, files["qclim"]))
     global qclim .= humid_result.data
-    
-    swet_result = read_jdal2(joinpath(climatology_dir, files["swetclim"]))
+
+    swet_result = read_jld2(joinpath(climatology_dir, files["swetclim"]))
     global swetclim .= swet_result.data
 
 	# Common climatology files
     println("📂 Loading common climatology fields...")
-    
-    cld_result = read_jdal2(joinpath(climatology_dir, "isccp.cloud_cover.clim.jd2"))
+
+    cld_result = read_jld2(joinpath(climatology_dir, "isccp.cloud_cover.clim.jld2"))
     global cldclim .= cld_result.data
-    
-    mld_result = read_jdal2(joinpath(climatology_dir, "woce.ocean_mixed_layer_depth.clim.jd2"))
+
+    mld_result = read_jld2(joinpath(climatology_dir, "woce.ocean_mixed_layer_depth.clim.jld2"))
     global mldclim .= mld_result.data
-    
-    tocean_result = read_jdal2(joinpath(climatology_dir, "Tocean.clim.jd2"))
+
+    tocean_result = read_jld2(joinpath(climatology_dir, "Tocean.clim.jld2"))
     global Toclim .= tocean_result.data
-    
-    omega_result = read_jdal2(joinpath(climatology_dir, "erainterim.omega.vertmean.clim.jd2"))
+
+    omega_result = read_jld2(joinpath(climatology_dir, "erainterim.omega.vertmean.clim.jld2"))
     global omegaclim .= omega_result.data
-    
-    omegastd_result = read_jdal2(joinpath(climatology_dir, "erainterim.omega_std.vertmean.clim.jd2"))
+
+    omegastd_result = read_jld2(joinpath(climatology_dir, "erainterim.omega_std.vertmean.clim.jld2"))
     global omegastdclim .= omegastd_result.data
-    
-    ws_result = read_jdal2(joinpath(climatology_dir, "erainterim.windspeed.850hpa.clim.jd2"))
+
+    ws_result = read_jld2(joinpath(climatology_dir, "erainterim.windspeed.850hpa.clim.jld2"))
     global wsclim .= ws_result.data
-	
+
     # Solar radiation (special: lat × time)
     println("📂 Loading solar radiation...")
-    solar_path = joinpath(jdal2_dir, "solar", "solar_radiation.clim.jd2")
+    solar_path = joinpath(jld2_dir, "solar", "solar_radiation.clim.jld2")
     if isfile(solar_path)
-        solar_result = read_jdal2(solar_path)
+        solar_result = read_jld2(solar_path)
         @assert size(solar_result.data) == (ydim, nstep_yr) "Wrong solar dimensions"
         global sw_solar .= solar_result.data
     else
         error("Solar radiation file not found: $solar_path")
     end
-	
+
     # Optional: Load flux corrections
     println("📂 Loading flux corrections...")
-    load_flux_corrections_jdal2!(jdal2_dir)
-    
+    load_flux_corrections_jld2!(jld2_dir)
+
     # Update wind sign splits
     @. uclim_m = ifelse(uclim >= 0.0, uclim, 0.0)
     @. uclim_p = ifelse(uclim < 0.0, uclim, 0.0)
     @. vclim_m = ifelse(vclim >= 0.0, vclim, 0.0)
     @. vclim_p = ifelse(vclim < 0.0, vclim, 0.0)
-    
-    println("✅ All GREB data loaded successfully from JDAL2")
+
+    println("✅ All GREB data loaded successfully from JLD2")
 end
 
 # ╔═╡ 22d5e751-f095-42d7-9c24-78e546b3ce37
@@ -2566,10 +2555,10 @@ Before running the model, load the climate input data from the `input/` director
 # ╔═╡ 4995d3d8-1f95-41d8-be6c-50663edbce10
 begin
 	# Path to input data directory (adjust if needed)
-	jdal2_dir = joinpath(@__DIR__, "greb_dataset_jdal2")
-	
+	jld2_dir = joinpath(@__DIR__, "greb_dataset_jld2")
+
 	# Load the data
-	load_greb_jdal2!(jdal2_dir, dataset=:ncep)
+	load_greb_jld2!(jld2_dir, dataset=:ncep)
 end
 
 # ╔═╡ 83e54812-2291-44e6-9b6e-0c0be57865d3
@@ -2954,7 +2943,7 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig)
 	if cfg.log_topo_drsp || cfg.log_qflux_dmc
         if !cfg.log_topo_drsp && cfg.log_qflux_dmc
             println("% loading flux correction fields...")
-            load_flux_corrections_jdal2!(jdal2_dir)
+            load_flux_corrections_jld2!(jld2_dir)
         end
         println("% flux correction  CO2 = ", CO2_ctrl)
         qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, timestate, cfg, ws)
@@ -3502,6 +3491,7 @@ end
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"

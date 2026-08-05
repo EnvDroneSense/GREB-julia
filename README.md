@@ -16,11 +16,11 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 > julia --project=.                 # activate the package env
 > using GREB
 > cfg = create_experiment_config(:full_model)
-> load_greb_jdal2!("greb_dataset_jdal2"; dataset=:ncep)
+> load_greb_jld2!("greb_dataset_jld2"; dataset=:ncep)
 > result = greb_model!(0, 1, 1, cfg)   # (flux, ctrl, scenario) years
 > ```
 > Run the tests with `julia --project=. -e 'using Pkg; Pkg.test()'`, or the full
-> driver with `julia --project=. examples/run_greb.jl <path/to/greb_dataset_jdal2>`.
+> driver with `julia --project=. examples/run_greb.jl <path/to/greb_dataset_jld2>`.
 
 ## 📖 Table of Contents
 
@@ -87,6 +87,7 @@ This installs all dependencies from `Project.toml`:
 |:--------|:--------|
 | `PlutoUI` | Interactive controls |
 | `NCDatasets` | NetCDF I/O (optional) |
+| `JLD2` | Reading/writing the model's `.jld2` input data |
 | `LoopVectorization` | SIMD performance |
 | `StaticArrays` | Optimized array operations |
 | `BenchmarkTools`, `Profile` | Performance analysis |
@@ -103,44 +104,51 @@ Open `GREB_julia.jl` from the Pluto interface.
 
 ## 📂 Input Data
 
-The model reads **JDAL2** formatted files. JDAL2 is a self-describing binary format with embedded dimensions.
+The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) — a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text).
 
-In the original model these were al seperate BIN files, but to improve loading efficiency and folder clarity these have been converted to JDAL2. these data files were to large to upload to github but can be made available on request.
+In the original model these were all separate `.bin` files. `scripts/convert_greb_to_jld2.jl` converts the raw GREB `.bin` input files (see [DATA_README.md](DATA_README.md) for their expected layout, normally under `Data/input/`) into this `.jld2` layout:
+
+```bash
+julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
+# defaults: input_dir=Data/input, output_dir=greb_dataset_jld2
+```
+
+These data files are too large to upload to GitHub but can be made available on request, or regenerated from the raw `.bin` files with the converter script.
 
 ### Directory Structure
 
 ```
-greb_dataset_jdal2/
+greb_dataset_jld2/
 ├── static/
-│   ├── global.topography.jd2      # 2D (96×48)
-│   └── greb.glaciers.jd2          # 2D (96×48)
+│   ├── global.topography.jld2      # 2D (96×48)
+│   └── greb.glaciers.jld2          # 2D (96×48)
 ├── climatology/
-│   ├── ncep.tsurf.1948-2007.clim.jd2       # 3D (96×48×730)
-│   ├── ncep.zonal_wind.850hpa.clim.jd2
-│   ├── ncep.meridional_wind.850hpa.clim.jd2
-│   ├── ncep.atmospheric_humidity.clim.jd2
-│   ├── ncep.soil_moisture.clim.jd2
-│   ├── isccp.cloud_cover.clim.jd2
-│   ├── woce.ocean_mixed_layer_depth.clim.jd2
-│   ├── Tocean.clim.jd2
-│   ├── erainterim.omega.vertmean.clim.jd2
-│   ├── erainterim.omega_std.vertmean.clim.jd2
-│   ├── erainterim.windspeed.850hpa.clim.jd2
+│   ├── ncep.tsurf.1948-2007.clim.jld2       # 3D (96×48×730)
+│   ├── ncep.zonal_wind.850hpa.clim.jld2
+│   ├── ncep.meridional_wind.850hpa.clim.jld2
+│   ├── ncep.atmospheric_humidity.clim.jld2
+│   ├── ncep.soil_moisture.clim.jld2
+│   ├── isccp.cloud_cover.clim.jld2
+│   ├── woce.ocean_mixed_layer_depth.clim.jld2
+│   ├── Tocean.clim.jld2
+│   ├── erainterim.omega.vertmean.clim.jld2
+│   ├── erainterim.omega_std.vertmean.clim.jld2
+│   ├── erainterim.windspeed.850hpa.clim.jld2
 │   └── [flux_correction files]
 ├── solar/
-│   └── solar_radiation.clim.jd2   # 2D (48×730)
+│   └── solar_radiation.clim.jld2   # 2D (48×730)
 └── solar_scenarios/                # Optional
-    ├── solar_paleo.jd2
-    ├── solar_eccentricity.jd2
-    └── solar_obliquity.jd2
+    ├── solar_paleo.jld2
+    ├── solar_eccentricity.jld2    # (ecc_index, lat, time), coords[1] = actual eccentricity values
+    └── solar_obliquity.jld2       # (obl_index, lat, time), coords[1] = actual obliquity angles
 ```
 
 ### Loading Data
 
-In the notebook, set the `jdal2_dir` variable and run:
+In the notebook, set the `jld2_dir` variable and run:
 
 ```julia
-load_greb_jdal2!(jdal2_dir; dataset=:ncep)   # or :era
+load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
 ```
 
 ---
@@ -149,8 +157,8 @@ load_greb_jdal2!(jdal2_dir; dataset=:ncep)   # or :era
 ### 1. Load Data
 
 ```julia
-jdal2_dir = joinpath(@__DIR__, "greb_dataset_jdal2")
-load_greb_jdal2!(jdal2_dir; dataset=:ncep)
+jld2_dir = joinpath(@__DIR__, "greb_dataset_jld2")
+load_greb_jld2!(jld2_dir; dataset=:ncep)
 ```
 
 ### 2. Configure the Experiment

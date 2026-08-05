@@ -1,10 +1,10 @@
 using GREB
 using Test
 
-# Smoke tests that do NOT require the (large, external) JDAL2 input data.
+# Smoke tests that do NOT require the (large, external) JLD2 input data.
 # They check that the package loads, its types build, and the grid/constants
 # are intact after the notebook -> package extraction. Full integration runs
-# (which need `greb_dataset_jdal2/`) are demonstrated in examples/run_greb.jl.
+# (which need `greb_dataset_jld2/`) are demonstrated in examples/run_greb.jl.
 
 @testset "GREB.jl" begin
 
@@ -49,22 +49,22 @@ using Test
 
     @testset "greb_model! runs without notebook globals" begin
         # Regression: qflux_correction!/greb_model! used to reference the Pluto
-        # @bind globals `time_flux`/`jdal2_dir`. They are now parameters, so the
+        # @bind globals `time_flux`/`jld2_dir`. They are now parameters, so the
         # model must run to completion on default (unloaded) fields. Values are
-        # NaN without real JDAL2 data — we only assert it runs and shapes are OK.
+        # NaN without real JLD2 data — we only assert it runs and shapes are OK.
         cfg = create_experiment_config(:full_model)
         result = redirect_stdout(devnull) do
-            greb_model!(0, 1, 0, cfg; jdal2_dir = "")
+            greb_model!(0, 1, 0, cfg; jld2_dir = "")
         end
         @test length(result.ctrl) == 12
         @test length(result.scnr) == 0
         @test result.ctrl[1] isa MonthlyRecord
     end
 
-    @testset "read_jdal2 rejects non-JDAL2 input" begin
-        tmp = tempname()
-        write(tmp, "not a jdal2 file")
-        @test_throws Exception read_jdal2(tmp)
+    @testset "read_jld2 rejects non-JLD2 input" begin
+        tmp = tempname() * ".jld2"
+        write(tmp, "not a jld2 file")
+        @test_throws Exception read_jld2(tmp)
         rm(tmp; force = true)
     end
 
