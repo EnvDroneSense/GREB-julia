@@ -23,6 +23,14 @@ function read_jld2(filepath::String)
     end
 end
 
+"""
+    load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::Int=0)
+
+Loads an alternate solar-forcing table for paleo/orbital experiments.
+`forcing_type` is `:paleo`, `:eccentricity`, or `:obliquity`; for the latter
+two, `index` selects the matching row by coordinate value. Used by
+`greb_model!` to temporarily swap `fields.sw_solar` for these experiments.
+"""
 # ── notebook cell 8578d6aa-2782-4279-8f6b-78194b8ecc10  (orig lines 113-140) ──
 function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::Int=0)
 

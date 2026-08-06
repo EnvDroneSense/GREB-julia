@@ -1,3 +1,12 @@
+"""
+    tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
+
+Runs one timestep's physics pipeline in order — [`SWradiation!`](@ref) →
+[`LWradiation!`](@ref) → sensible heat → [`hydro!`](@ref) →
+[`circulation!`](@ref) (temperature, then humidity) → [`deep_ocean!`](@ref) —
+and returns a named tuple of every intermediate flux/tendency needed by
+[`diagnostics!`](@ref) and the caller's own state update.
+"""
 # ── notebook cell e493fae7-239a-494c-9a59-728446d70f7a  (orig lines 2080-2127) ──
 function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelState, ws::CirculationWorkspace,
     timestate, cfg::PhysicsConfig)
@@ -46,11 +55,27 @@ function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelStat
         em=lw_out.em)
 end
 
+"""
+    forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
+
+Returns `(CO2, sw_solar_forcing)` for the current timestep, computed
+according to `cfg.experiment`. Some experiments (the `regional_co2_*` family)
+also mutate `fields.co2_part` as a side effect. `:full_model` short-circuits
+before the experiment dispatch chain.
+"""
 # ── notebook cell 1894ad94-cdf8-4e79-a0e5-b72088db31be  (orig lines 2162-2343) ──
 function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
     CO2 = cfg.co2_concentration
     sw_solar_forcing = 1.0
+
+    # Fast path for the main experiment: every branch below is a no-op for
+    # :full_model, but without this it still falls through all of them,
+    # including an allocating `string(cfg.experiment)` + `startswith` check
+    # (line ~154) on every single timestep of the most common run type.
+    if cfg.experiment == :full_model
+        return (CO2=CO2, sw_solar_forcing=sw_solar_forcing)
+    end
 
     # 📜 Legacy experiments ───────────
     if cfg.experiment == :constant_topo

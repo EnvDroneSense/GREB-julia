@@ -1,3 +1,11 @@
+"""
+    seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
+
+Updates `fields.cap_surf` (surface heat capacity) for ocean points based on
+`Ts0`-derived ice fraction, blending land/open-ocean/ice capacities. No-op if
+`cfg.log_ocean_dmc` is false; skips the ice-albedo blend if `cfg.log_ice` is
+false.
+"""
 # ── notebook cell 9bff59c5-4631-4091-8230-989a835788e5  (orig lines 1650-1688) ──
 function seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
     mld = @view fields.mldclim[:, :, timestate.ityr]
@@ -40,6 +48,14 @@ function seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
     @. cap_surf = ifelse(glacier > 0.5, cap_land, cap_surf)
 end
 
+"""
+    deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
+
+Computes surface/deep-ocean coupling tendencies (`dT_ocean`, `dTo`) from
+mixed-layer-depth entrainment/detrainment and turbulent mixing, active only
+where the point is ocean and above the sea-ice threshold. Returns zeros if
+`cfg.log_ocean_dmc`/`cfg.log_ocean_drsp` disable ocean coupling.
+"""
 # ── notebook cell 625089e2-ef77-4821-a6d6-d0a0f88207f2  (orig lines 1703-1750) ──
 function deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Use pre-allocated zero buffers

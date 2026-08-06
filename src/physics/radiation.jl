@@ -1,3 +1,10 @@
+"""
+    SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
+
+Computes ice cover, surface/atmospheric/combined albedo, and net shortwave
+flux from `Ts` and the current cloud climatology. Returns
+`(SW, albedo, ice_cover)`.
+"""
 # ── notebook cell 1df2b91b-be14-427a-87b3-95cdef26ce00  (orig lines 1359-1419) ──
 function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Reuse workspace buffers
@@ -63,6 +70,16 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
     return (SW=sw, albedo=albedo, ice_cover=ice_cover)
 end
 
+"""
+    LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
+
+Computes atmospheric emissivity from CO₂/water-vapor/cloud columns, then
+surface/upward/downward longwave flux. If `cfg.log_atmos_dmc` is false, only
+`LW_down` is zeroed — `LW_up` is snapshotted beforehand and keeps its full
+value (decouples surface from atmospheric downwelling feedback without
+touching the atmosphere's own emission term). Returns
+`(LW_surf, LW_up, LW_down, em)`.
+"""
 # ── notebook cell c0c40037-4169-4d38-bebe-2086cebc24f2  (orig lines 1437-1476) ──
 function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Extract workspace buffers

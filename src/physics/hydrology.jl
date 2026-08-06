@@ -1,3 +1,24 @@
+# Hoisted from hydro!'s body (IMPROVEMENTS.md §4.5): these depend only on
+# module-level constants, not on any per-call argument, so recomputing them
+# as locals every timestep was pure waste.
+const _HYDRO_CONST_FACTOR1 = 3.75e-3
+const _HYDRO_CONST_FACTOR2 = 17.08085
+const _HYDRO_CONST_FACTOR3 = 234.175
+const _HYDRO_GUST_LAND = 4.0
+const _HYDRO_GUST_OCEAN = 9.0
+const _HYDRO_CE_LAND = 0.25 * ce
+const _HYDRO_CE_OCEAN = 0.58 * ce
+const _HYDRO_CONST_LATENT = cq_latent * ρ_air * ce
+
+"""
+    hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
+
+Computes latent heat flux and evaporation/rain tendencies. `cfg.log_eva`
+(-1/0/1/2) selects the wind-gust/coefficient parameterization used for
+evaporation; `cfg.log_rain` (via `cfg.c_q`/`c_rq`/`c_omega`/`c_omegastd`, set
+by [`set_hydrology_parameters!`](@ref)) controls the rain regression.
+Returns `(Q_lat, Q_lat_air, dq_eva, dq_rain)`.
+"""
 # ── notebook cell 606032a2-b2ca-4fd8-9930-afd83aecec7a  (orig lines 1495-1608) ──
 function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     c_q = cfg.c_q
@@ -24,14 +45,14 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
     omega = @view fields.omegaclim[:, :, timestate.ityr]
     omegastd = @view fields.omegastdclim[:, :, timestate.ityr]
 
-    const_factor1 = 3.75e-3
-    const_factor2 = 17.08085
-    const_factor3 = 234.175
-    gust_land = 4.0
-    gust_ocean = 9.0
-    cE_land = 0.25 * ce
-    cE_ocean = 0.58 * ce
-    const_latent = cq_latent * ρ_air * ce
+    const_factor1 = _HYDRO_CONST_FACTOR1
+    const_factor2 = _HYDRO_CONST_FACTOR2
+    const_factor3 = _HYDRO_CONST_FACTOR3
+    gust_land = _HYDRO_GUST_LAND
+    gust_ocean = _HYDRO_GUST_OCEAN
+    cE_land = _HYDRO_CE_LAND
+    cE_ocean = _HYDRO_CE_OCEAN
+    const_latent = _HYDRO_CONST_LATENT
 
     # Saturation humidity
     @turbo for j in 1:ydim

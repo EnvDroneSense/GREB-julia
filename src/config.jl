@@ -1,4 +1,13 @@
 # ── notebook cell 19f106e4-2b82-47e1-9284-799a105f30cb  (orig lines 235-291) ──
+"""
+    PhysicsConfig
+
+All model switches and parameters: mean-climate/CO₂-response toggles,
+circulation components, hydrology parameters, external-forcing flags, and
+the current experiment type. Passed explicitly to every physics function;
+build one with [`create_experiment_config`](@ref) rather than the bare
+keyword constructor for anything beyond `:full_model`.
+"""
 Base.@kwdef mutable struct PhysicsConfig
     # Mean Climate Switches
     log_clouds_dmc::Bool = true

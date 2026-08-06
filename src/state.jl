@@ -7,9 +7,8 @@ begin
         Reused across all time steps to eliminate allocations.
         """
     mutable struct CirculationWorkspace
-        # Polar sub-stepping buffers
+        # Polar sub-stepping buffer
         T1h::Vector{Float64}      # polar sub-stepping
-        dTxh::Vector{Float64}     # polar tendencies
 
         # Circulation work arrays
         X_work::Matrix{Float64}   # circulation work array
@@ -77,7 +76,6 @@ begin
     function CirculationWorkspace()
         CirculationWorkspace(
             zeros(Float64, xdim),# T1h
-            zeros(Float64, xdim),# dTxh
             zeros(Float64, xdim, ydim),# X_work
             zeros(Float64, xdim, ydim),# dX_diff
             zeros(Float64, xdim, ydim),# dX_adv
@@ -301,7 +299,13 @@ end
 
 # ── notebook cell 047b312f-8d6c-4732-aa0b-bea3de3e99e2  (orig lines 984-1002, split: see constants.jl for the calendar-lookup consts from this cell) ──
 begin
-    # 🕐 Time State Struct
+    """
+        TimeState
+
+    Tracks the model's position within the current year: `jday` (calendar
+    day, 1..365) and `ityr` (timestep-of-year, 1..`nstep_yr`). Mutated in
+    place each timestep by [`time_loop!`](@ref)/[`qflux_correction!`](@ref).
+    """
     mutable struct TimeState
         jday::Int  # Current calendar day in year [1..365]
         ityr::Int  # Current timestep in year [1..730]
@@ -338,5 +342,12 @@ function ModelState()
 end
 
 # ── notebook cell 7a06bf0d-a61c-4d28-b144-2725fe90ae62  (orig lines 1179-1182) ──
-# Type alias for one monthly output record
+"""
+    MonthlyRecord
+
+One monthly-mean output record: a `NamedTuple` with fields `Ts`, `Ta`, `To`,
+`q`, `albedo`, `ice`, `precip`, `evap`, `qcrcl`, `sw`, `lw`, `qlat`, `qsens`,
+each an `(xdim, ydim)` `Matrix{Float64}`. Produced by [`output!`](@ref);
+`greb_model!`'s `ctrl`/`scnr` results are `Vector{MonthlyRecord}`.
+"""
 const MonthlyRecord = NamedTuple{(:Ts, :Ta, :To, :q, :albedo, :ice, :precip, :evap, :qcrcl, :sw, :lw, :qlat, :qsens),NTuple{13,Matrix{Float64}}};

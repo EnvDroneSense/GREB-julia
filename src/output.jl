@@ -1,3 +1,11 @@
+"""
+    diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, fields, state, timestate)
+
+Accumulates the current timestep into `state`'s annual-mean buffers; at the
+last timestep of the year, averages them, prints the annual summary line
+(global mean + two sample points), and resets the accumulators for the next
+year.
+"""
 # ── notebook cell cc0e682c-8767-498e-8178-2de4e796b3a8  (orig lines 2355-2392) ──
 function diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, fields::ClimateFields, state::ModelState, timestate)
     # Accumulate
@@ -53,6 +61,13 @@ function diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_l
     return nothing
 end
 
+"""
+    output!(it, irec, mon, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens, output_buf, acc, timestate)
+
+Accumulates the current timestep into `acc`; on the last timestep of `mon`,
+pushes a monthly-mean [`MonthlyRecord`](@ref) onto `output_buf`, resets `acc`,
+and advances to the next month. Returns `(irec, mon)`.
+"""
 # ── notebook cell dfdde9f1-b226-4af0-9ac2-36f1b01622fa  (orig lines 2405-2437) ──
 function output!(it, irec, mon, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens,
     output_buf::Vector{MonthlyRecord}, acc::MonthlyAccumulator, timestate)
@@ -86,6 +101,14 @@ function output!(it, irec, mon, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qc
     return (irec=irec, mon=mon)
 end
 
+"""
+    time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf, fields, state, ws, acc, timestate, cfg)
+
+One full model timestep: computes [`tendencies!`](@ref), integrates
+`Ts`/`Ta`/`To`/`q` forward with flux corrections applied, runs
+[`seaice!`](@ref), then dispatches to [`output!`](@ref) and
+[`diagnostics!`](@ref). Returns `(mon, irec)`.
+"""
 # ── notebook cell 33fa7b1f-938b-481c-bf25-eca8d7fb33a7  (orig lines 2438-2500) ──
 function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     fields::ClimateFields, state::ModelState, ws::CirculationWorkspace, acc::MonthlyAccumulator,
