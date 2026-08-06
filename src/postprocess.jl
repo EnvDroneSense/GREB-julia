@@ -1,10 +1,10 @@
+# ── notebook cell 4f97badf-a501-4c70-a943-d3c86b48f8a1  (orig lines 2501-2537) ──
 """
     build_monthly_climatology(records::Vector{MonthlyRecord})::Vector{MonthlyRecord}
 
 Averages a multi-year run's monthly `records` into a 12-month climatology,
 one mean per calendar month across however many years are present.
 """
-# ── notebook cell 4f97badf-a501-4c70-a943-d3c86b48f8a1  (orig lines 2501-2537) ──
 function build_monthly_climatology(records::Vector{MonthlyRecord})::Vector{MonthlyRecord}
     isempty(records) && return MonthlyRecord[]
 
@@ -41,6 +41,7 @@ function build_monthly_climatology(records::Vector{MonthlyRecord})::Vector{Month
     return clim
 end
 
+# ── notebook cell bf5ccbb7-fff9-42bc-8f2f-2e628b448b3a  (orig lines 2538-2554) ──
 """
     apply_scenario_anomalies(scnr_records, ctrl_clim)::Vector{MonthlyRecord}
 
@@ -48,7 +49,6 @@ Subtracts the matching calendar month of `ctrl_clim` (from
 [`build_monthly_climatology`](@ref)) from each record in `scnr_records`,
 turning absolute monthly output into anomalies relative to the control run.
 """
-# ── notebook cell bf5ccbb7-fff9-42bc-8f2f-2e628b448b3a  (orig lines 2538-2554) ──
 function apply_scenario_anomalies(scnr_records::Vector{MonthlyRecord}, ctrl_clim::Vector{MonthlyRecord})::Vector{MonthlyRecord}
     isempty(scnr_records) && return scnr_records
     isempty(ctrl_clim) && return scnr_records
@@ -65,13 +65,13 @@ function apply_scenario_anomalies(scnr_records::Vector{MonthlyRecord}, ctrl_clim
     return anom
 end
 
+# ── notebook cell 867b193e-3390-4b3b-b5fe-5c399a250660  (orig lines 2587-2606) ──
 """
     compute_annual_ice_climatology(ctrl_output::Vector{MonthlyRecord})
 
 Averages `ctrl_output`'s `ice` field into a 12-month climatology, returned as
 an `(xdim, ydim, 12)` array.
 """
-# ── notebook cell 867b193e-3390-4b3b-b5fe-5c399a250660  (orig lines 2587-2606) ──
 function compute_annual_ice_climatology(ctrl_output::Vector{MonthlyRecord})
     ice_months = zeros(Float64, xdim, ydim, 12)
     count = zeros(Int, 12)

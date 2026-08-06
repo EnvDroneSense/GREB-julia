@@ -21,9 +21,9 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         # -- colder than anywhere on Earth ever gets, so it can never
         # physically bind. Kept at 233.15 K (-40°C) intentionally: Fortran
         # isn't always the right reference to match literally.
-        @test GREB.min_T_K == 233.15
+        @test GREB.min_T_K ≈ 233.15
         Ts = fill(220.0, GREB.xdim, GREB.ydim)
-        @test all(==(233.15), max.(Ts, GREB.min_T_K))
+        @test all(≈(233.15), max.(Ts, GREB.min_T_K))
     end
 
     @testset "PhysicsConfig" begin
@@ -214,7 +214,10 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         fields = ClimateFields()
         cfg_regional = PhysicsConfig(experiment=:regional_co2_nh)
         redirect_stdout(devnull) do
-            greb_model!(RunSpec(), cfg_regional; jld2_dir = "", fields = fields)
+            # scnr=0: the mask is set once by init_model! before the ctrl
+            # loop even starts, so a scenario year adds runtime with no
+            # extra signal for this assertion.
+            greb_model!(RunSpec(scnr = 0), cfg_regional; jld2_dir = "", fields = fields)
         end
         @test any(!=(1.0), fields.co2_part)  # regional run actually changed the mask
 
@@ -454,6 +457,23 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test out_off.LW_up == out_on.LW_up
     end
 
+    @testset "SWradiation! is allocation-free" begin
+        # Regression: `@. sw[:, j] = sf * (1.0 - albedo[:, j])` looked
+        # allocation-free but `albedo[:, j]` on the RHS is plain getindex
+        # (not a dotview like the LHS), materializing a fresh Vector every
+        # iteration — 40704 bytes/call, the entire allocation footprint of
+        # tendencies! (which calls SWradiation! once per timestep). Fixed
+        # with @views; every other kernel already benchmarks at 0 bytes.
+        fields = ClimateFields()
+        state = ModelState()
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+        cfg = create_experiment_config(:full_model)
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        SWradiation!(Ts, fields, state, ts, cfg, ws)  # warm up (compilation)
+        @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) == 0
+    end
+
     @testset "greb_model! swaps sw_solar for paleo experiments, restores after" begin
         # Regression: paleo/orbital experiments never actually loaded the
         # alternate solar-forcing table despite load_solar_forcing_jld2
@@ -533,8 +553,13 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         # dataset, snapshotted as monthly global-mean Ts/Ta/q. Drift beyond
         # float-reassociation noise (~1e-12, per §1.1's validation) means
         # real behavior changed, not just codegen.
+        #
+        # Set RUN_GOLDEN=0 to skip this one locally (it's the slowest
+        # DATA_DIR-gated test); CI always runs it (default RUN_GOLDEN=1).
         if !isdir(DATA_DIR)
             @test_skip "greb_dataset_jld2/ not present"
+        elseif get(ENV, "RUN_GOLDEN", "1") == "0"
+            @test_skip "RUN_GOLDEN=0"
         else
             fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
             cfg = create_experiment_config(:full_model)

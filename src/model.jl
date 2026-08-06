@@ -1,3 +1,4 @@
+# ── notebook cell d404043f-8080-4262-9ab6-d9bb13eee504  (orig lines 1200-1304) ──
 """
     init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
@@ -6,7 +7,6 @@ regional-CO₂ mask, applies CO₂-response climatology overrides
 (`log_clouds_drsp`/`log_humid_drsp`/`log_ocean_drsp`), and computes the
 control-run initial state. Returns `(Ts_ini, Ta_ini, To_ini, q_ini, CO2_ctrl)`.
 """
-# ── notebook cell d404043f-8080-4262-9ab6-d9bb13eee504  (orig lines 1200-1304) ──
 function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
     # ── Hydrology Parameter Initialization ────────────
@@ -152,6 +152,7 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
         q_ini=q_ini, CO2_ctrl=CO2_ctrl)
 end
 
+# ── notebook cell 584e767e-4dc5-4821-af63-d6a825326d9e  (orig lines 2869-2928) ──
 """
     qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields, state, timestate, cfg, ws, time_flux)
 
@@ -160,7 +161,6 @@ corrections (`fields.TF_correct`/`qF_correct`/`ToF_correct`) that make the
 control climate match observed climatology. Mutates `Ts`/`Ta`/`q`/`To` in
 place as it integrates.
 """
-# ── notebook cell 584e767e-4dc5-4821-af63-d6a825326d9e  (orig lines 2869-2928) ──
 function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace, time_flux)
     cap_surf = fields.cap_surf
     for it in 1:(time_flux*ndt_days*ndays_yr)

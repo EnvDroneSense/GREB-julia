@@ -1,3 +1,4 @@
+# ── notebook cell 1df2b91b-be14-427a-87b3-95cdef26ce00  (orig lines 1359-1419) ──
 """
     SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -5,7 +6,6 @@ Computes ice cover, surface/atmospheric/combined albedo, and net shortwave
 flux from `Ts` and the current cloud climatology. Returns
 `(SW, albedo, ice_cover)`.
 """
-# ── notebook cell 1df2b91b-be14-427a-87b3-95cdef26ce00  (orig lines 1359-1419) ──
 function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Reuse workspace buffers
     ice_cover = ws.ice_cover_buf # output: ice fraction
@@ -64,12 +64,16 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
     sw_solar = fields.sw_solar
     for j in 1:ydim
         sf = sw_solar[j, timestate.ityr] * multiplier
-        @. sw[:, j] = sf * (1.0 - albedo[:, j])
+        # @views: `albedo[:, j]` on the RHS of `@.` is plain getindex (not a
+        # dotview like the LHS), so without this it allocates a fresh
+        # Vector{Float64} every iteration.
+        @views @. sw[:, j] = sf * (1.0 - albedo[:, j])
     end
 
     return (SW=sw, albedo=albedo, ice_cover=ice_cover)
 end
 
+# ── notebook cell c0c40037-4169-4d38-bebe-2086cebc24f2  (orig lines 1437-1476) ──
 """
     LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -80,7 +84,6 @@ value (decouples surface from atmospheric downwelling feedback without
 touching the atmosphere's own emission term). Returns
 `(LW_surf, LW_up, LW_down, em)`.
 """
-# ── notebook cell c0c40037-4169-4d38-bebe-2086cebc24f2  (orig lines 1437-1476) ──
 function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Extract workspace buffers
     e_co2 = ws.e_co2_buf    # CO₂ [ppm scaled by pressure]

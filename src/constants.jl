@@ -2,8 +2,10 @@
 # Note: this should be in the script
 begin
     # 📐 Grid dimensions ──────────────────────────────────
-    const xdim = 96                                 # number of longitude grid points
-    const ydim = 48                                 # number of latitude grid points
+    "Number of longitude grid points."
+    const xdim = 96
+    "Number of latitude grid points."
+    const ydim = 48
     const dlon = 360.0 / xdim                       # longitude spacing [degrees]
     const dlat = 180.0 / ydim                       # latitude spacing  [degrees]
 
@@ -12,7 +14,8 @@ begin
     const Δt = 12.0 * 3600.0                        # main time step [s] (12 hours)
     const Δt_crcl = 1800.0                          # circulation sub-time step [s] (30 min)
     const ndt_days = Int(round(24 * 3600 / Δt))     # time steps per day
-    const nstep_yr = Int(ndays_yr * ndt_days)       # time steps per year (= 730)
+    "Time steps per year (`ndays_yr * ndt_days` = 730)."
+    const nstep_yr = Int(ndays_yr * ndt_days)
     const ntime = max(1, Int(round(Δt / Δt_crcl)))  # Number of sub-steps within one main time step
 
     # 📅 Calendar constants ───────────────────────────────

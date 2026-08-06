@@ -10,6 +10,7 @@ const _HYDRO_CE_LAND = 0.25 * ce
 const _HYDRO_CE_OCEAN = 0.58 * ce
 const _HYDRO_CONST_LATENT = cq_latent * ρ_air * ce
 
+# ── notebook cell 606032a2-b2ca-4fd8-9930-afd83aecec7a  (orig lines 1495-1608) ──
 """
     hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -19,7 +20,6 @@ evaporation; `cfg.log_rain` (via `cfg.c_q`/`c_rq`/`c_omega`/`c_omegastd`, set
 by [`set_hydrology_parameters!`](@ref)) controls the rain regression.
 Returns `(Q_lat, Q_lat_air, dq_eva, dq_rain)`.
 """
-# ── notebook cell 606032a2-b2ca-4fd8-9930-afd83aecec7a  (orig lines 1495-1608) ──
 function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     c_q = cfg.c_q
     c_rq = cfg.c_rq

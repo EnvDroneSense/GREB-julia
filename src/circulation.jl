@@ -1,3 +1,4 @@
+# ── notebook cell ba96178d-77d4-4f26-a94f-5ad43c5242db  (orig lines 1777-1888) ──
 """
     convergence!(T1, fields::ClimateFields, timestate, ws::CirculationWorkspace)
 
@@ -25,7 +26,6 @@ Meridional + zonal diffusion of `T1` (temperature or humidity), writing the
 tendency into `ws.dX_diff`. `h_scl` (`z_air` or `z_vapor`) selects the
 topographic weighting field.
 """
-# ── notebook cell ba96178d-77d4-4f26-a94f-5ad43c5242db  (orig lines 1777-1888) ──
 function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate)
     # Zero output buffer (we will accumulate into it)
     fill!(ws.dX_diff, 0.0)
@@ -152,6 +152,7 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
     return nothing
 end
 
+# ── notebook cell 2bab06b9-ca98-4142-99cb-d2ad4f1cde93  (orig lines 1903-2046) ──
 """
     advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
 
@@ -159,7 +160,6 @@ Meridional + zonal advection of `T1` (temperature or humidity), writing the
 tendency into `ws.dX_adv`. Gated by `cfg.log_hadv`/`cfg.log_vadv` depending on
 `h_scl`.
 """
-# ── notebook cell 2bab06b9-ca98-4142-99cb-d2ad4f1cde93  (orig lines 1903-2046) ──
 function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
     # Disable advection for water vapour or heat according to switches
     if (h_scl == z_vapor && !cfg.log_vadv) || (h_scl == z_air && !cfg.log_hadv)
@@ -307,6 +307,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
     return nothing
 end
 
+# ── notebook cell db75ea52-9387-4c15-bde5-61777ac9b570  (orig lines 2047-2079) ──
 """
     circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
 
@@ -315,7 +316,6 @@ Sub-steps `X_in` through `ntime` iterations of [`diffusion!`](@ref),
 `cfg.log_*` switch), writing the total change into `dX_out`. The sub-step
 loop is a genuine sequential recurrence and is not parallelized.
 """
-# ── notebook cell db75ea52-9387-4c15-bde5-61777ac9b570  (orig lines 2047-2079) ──
 function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
     # Early exit if atmospheric processes disabled
     if (!cfg.log_atmos_dmc || !cfg.log_crcl_dmc || !cfg.log_crcl_drsp)

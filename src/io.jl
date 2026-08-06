@@ -1,4 +1,5 @@
 # ── notebook cell b303e4e9-49fa-45ad-967e-20f165fdf38c  (orig lines 73-112) ──
+# ── notebook cell 8578d6aa-2782-4279-8f6b-78194b8ecc10  (orig lines 113-140) ──
 """
     read_jld2(filepath::String)
 
@@ -31,7 +32,6 @@ Loads an alternate solar-forcing table for paleo/orbital experiments.
 two, `index` selects the matching row by coordinate value. Used by
 `greb_model!` to temporarily swap `fields.sw_solar` for these experiments.
 """
-# ── notebook cell 8578d6aa-2782-4279-8f6b-78194b8ecc10  (orig lines 113-140) ──
 function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::Int=0)
 
     if forcing_type == :paleo

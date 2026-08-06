@@ -1,3 +1,4 @@
+# ── notebook cell e493fae7-239a-494c-9a59-728446d70f7a  (orig lines 2080-2127) ──
 """
     tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
 
@@ -7,7 +8,6 @@ Runs one timestep's physics pipeline in order — [`SWradiation!`](@ref) →
 and returns a named tuple of every intermediate flux/tendency needed by
 [`diagnostics!`](@ref) and the caller's own state update.
 """
-# ── notebook cell e493fae7-239a-494c-9a59-728446d70f7a  (orig lines 2080-2127) ──
 function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelState, ws::CirculationWorkspace,
     timestate, cfg::PhysicsConfig)
 
@@ -55,6 +55,7 @@ function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelStat
         em=lw_out.em)
 end
 
+# ── notebook cell 1894ad94-cdf8-4e79-a0e5-b72088db31be  (orig lines 2162-2343) ──
 """
     forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
 
@@ -63,7 +64,6 @@ according to `cfg.experiment`. Some experiments (the `regional_co2_*` family)
 also mutate `fields.co2_part` as a side effect. `:full_model` short-circuits
 before the experiment dispatch chain.
 """
-# ── notebook cell 1894ad94-cdf8-4e79-a0e5-b72088db31be  (orig lines 2162-2343) ──
 function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
     CO2 = cfg.co2_concentration

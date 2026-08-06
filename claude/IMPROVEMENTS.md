@@ -1,6 +1,6 @@
 # GREB.jl — Potential Improvements (Structure & Performance)
 
-Observations and fixes for the `GREB` module, accumulated across five audit
+Observations and fixes for the `GREB` module, accumulated across six audit
 passes (2026-08-05 through 2026-08-06). The model was split from a single
 2245-line `src/GREB.jl` into topical files under `src/` (§1.2) and its ~40
 mutable module-level globals were replaced with explicit `ClimateFields`/
@@ -14,7 +14,7 @@ a documented finding that was investigated and intentionally not changed.
 
 ## 0. Known bugs — fixed ✅
 
-17 real, previously-shipped bugs found and fixed across four passes (an 18th
+18 real, previously-shipped bugs found and fixed across five passes (a 19th
 finding was investigated and reverted — see 0.14), each with a regression
 test in `test/runtests.jl`. Passes 1–3 were found by grepping every
 config-field write against its read sites; pass 4 (fourth pass, below) was a
@@ -127,6 +127,28 @@ line(s) confirmed by direct read (not recalled from memory).
   `log_hydro_dmc==0` only zeroed the eva/rain terms; Fortran zeroes the
   *entire* `dq` including circulation and flux correction
   (`greb.model.mscm.f90:486`). Fixed both in `time_loop!`'s humidity update.
+
+### Fifth pass (2026-08-06): allocation fix + a real doc-tooling bug
+- **0.19 19 exported functions' docstrings were silently detached from their
+  bindings**: the codebase's convention of a `# ── notebook cell ... ──`
+  comment line placed *between* a docstring and the `function`/`struct` it
+  documents breaks Julia's `@doc` binding — a bare comment in that position
+  is enough to disconnect the string literal from the definition, even
+  though it reads as attached in the source. Confirmed with a minimal
+  repro and with `Docs.hasdoc` before/after across every exported symbol:
+  `init_model!`, `qflux_correction!`, `diffusion!`/`advection!`/`circulation!`,
+  `diagnostics!`/`output!`/`time_loop!`, `build_monthly_climatology`/
+  `apply_scenario_anomalies`/`compute_annual_ice_climatology`,
+  `SWradiation!`/`LWradiation!`, `seaice!`/`deep_ocean!`, `tendencies!`/
+  `forcing`, `load_solar_forcing_jld2`, `hydro!` — 19 of the module's 36
+  exports had a docstring in the source that `@doc`/Documenter's `@autodocs`
+  would never actually see. Found while wiring up §3's Documenter.jl site
+  (an `@autodocs` page would have silently rendered blank for most of the
+  API). Fixed by moving each notebook-cell comment to *before* its
+  docstring instead of after (a mechanical, mass find-and-fix across the 9
+  affected files, verified by re-running `Docs.hasdoc` against all 36
+  exports — 0 missing after). Also added docstrings to `xdim`/`ydim`/
+  `nstep_yr`, the 3 exports that genuinely never had one.
 
 **Investigated, not changed**: `log_eva==1`'s land gust literal (`144.0`) —
 Fortran's text has `144.**2` (=20736), but every sibling mode's gust term is
@@ -246,6 +268,47 @@ plain `Threads.@threads` here without a reason to expect a different result.
 `PrecompileTools.@compile_workload` compiles the heavy kernels at package
 build time (~2 min once, e.g. in CI) instead of on every user's first call.
 
+### 2.7 Cut `SWradiation!`'s per-call allocation ✅ done
+`for j in 1:ydim; sf = ...; @. sw[:, j] = sf * (1.0 - albedo[:, j]); end` —
+`albedo[:, j]` on the RHS of `@.` is plain `getindex`, not a `dotview` like
+the LHS, so it materialized a fresh `Vector{Float64}` every iteration: 40704
+bytes / 48 allocs per call, confirmed with `@allocated`, and the *entire*
+allocation footprint of `tendencies!` (which calls it once per timestep) —
+every other kernel already benchmarked at 0 bytes. Fixed by wrapping the
+loop body in `@views`. Found via the existing per-kernel benchmark harness
+(`benchmark/run_benchmarks.jl`) rather than a fresh `@profview` session,
+since it already isolates every hot kernel individually and pointed
+straight at the one non-zero entry.
+
+### 2.8 Hot-loop field/config localization + type stability — audited, clean
+Checked whether `fields.xyz`/`cfg.xyz` get re-dereferenced inside
+`@turbo`/`@inbounds` loops (they don't — already hoisted to locals before
+every hot loop across `circulation.jl`/`hydrology.jl`/`ocean.jl`) and
+whether any struct field is untyped/abstract (none are — `PhysicsConfig`,
+`ClimateFields`, `CirculationWorkspace`, `ModelState`, `RunSpec` are all
+concretely typed, so `@code_warntype` has nothing to flag). No changes
+needed; recorded so this doesn't get re-audited from scratch next pass.
+
+### 2.9 Precomputation/caching audit — clean, nothing left to hoist
+Re-checked every candidate for a static/precomputable value: the
+`regional_co2_*` masks are 4-of-6 hoisted to `init_model!` already (§4.4);
+the other 2 (`_ocean`/`_land_ice`) genuinely can't be, since they depend on
+`icmn_ctrl` (the control run's own output), which doesn't exist at init
+time. Solar forcing is already a precomputed lookup table
+(`fields.sw_solar[lat, day-of-year]`) — no per-timestep trig anywhere.
+Latitude/area weights (`lat_grid`, `dxlat_grid`, `ccx_diff`, `ccx_adv`,
+`IS_POLAR`) are already `const` arrays in `constants.jl`, referenced
+directly by the hot loops that use them, not recomputed. Nothing to do.
+
+**Flagged, not fixed** (incidental finding while auditing latitude
+weights): `output.jl:40`'s `global_mean = sum(state.Tsmn) / (xdim*ydim)` is
+an *unweighted* grid mean, not `cos(lat)`-area-weighted — every grid cell
+counts equally regardless of its actual area, which shrinks toward the
+poles. This is a scientific-accuracy question (would change diagnostic
+output numbers), not a performance one — needs the same
+Fortran-comparison-plus-judgment treatment as `min_T_K`/the gust literal,
+not a silent change made in passing during a perf-focused pass.
+
 ---
 
 ## 3. Testing, tooling & reproducibility
@@ -265,15 +328,34 @@ build time (~2 min once, e.g. in CI) instead of on every user's first call.
 - **CI** ✅ done, **`[compat]` bounds** ✅ done, **dead dependencies**
   (`NCDatasets`/`StaticArrays`/`Statistics`) removed ✅ done, **misplaced
   docstrings** (3 functions, string literal after `function` instead of
-  before) fixed ✅ done, **benchmark suite** (`benchmark/run_benchmarks.jl` +
-  `claude/BENCHMARKS.md`) added ✅ done.
+  before, plus 19 more with the *comment*-after-docstring variant of the
+  same shape — §0.19) fixed ✅ done, **benchmark suite**
+  (`benchmark/run_benchmarks.jl` + `claude/BENCHMARKS.md`) added ✅ done,
+  **`Documenter.jl` site** ✅ done (`docs/`, deployed to GitHub Pages on
+  push to `main` via `.github/workflows/docs.yml`).
+- **Test suite cost audit** ✅ done: a live timed `Pkg.test()` run (164
+  passed / 2 failed, 2m36.9s) found and fixed a real, currently-failing
+  assertion — `@test GREB.min_T_K == 233.15` fails because
+  `273.15 - 40.0` rounds to `233.14999999999998` in Float64, not the
+  literal; fixed by comparing with `≈` instead of `==`. Re-read the whole
+  suite and confirmed no testset is a genuine duplicate of another (each
+  traces to a distinct bug), but found 4 non-`DATA_DIR`-gated testsets that
+  each run one or more full 12-month `greb_model!` simulations on synthetic
+  data and together ate 119.1s of the 156.9s total (76%) for
+  crash/shape-only signal; one had a safe cut (the `co2_part` mask-reset
+  test's first run only needs `init_model!`'s mask, not a completed
+  scenario year — trimmed `RunSpec()` to `RunSpec(scnr=0)`), the rest had
+  no safe cut without losing real coverage. Added a `RUN_GOLDEN` env var
+  (default on) to additionally skip the golden snapshot test locally even
+  when `greb_dataset_jld2/` is present, alongside the existing `DATA_DIR`
+  gate.
 - **Remaining gaps**: `qflux_correction!`'s loop body has zero coverage
   (every test uses `time_flux=0`; README's own "Known Issues" flags this
   module as possibly broken) — worth a dedicated look. Most `experiment`
   symbols (only 9 of ~25+) are unreachable via `create_experiment_config`.
   `build_monthly_climatology`/`apply_scenario_anomalies` are undertested.
   `load_greb_jld2!`/`load_flux_corrections_jld2!`'s "file exists" branches
-  are untested without the real dataset. No `Documenter.jl` site.
+  are untested without the real dataset.
 
 ---
 
@@ -307,21 +389,31 @@ preserve the chain's "missing branch = valid no-op" semantics carefully
 Adding one means picking a formatting style first — a decision, not a
 mechanical addition.
 
+### 4.11 `output.jl`'s `global_mean` is an unweighted grid mean — see §2.9
+`sum(state.Tsmn) / (xdim*ydim)` treats every grid cell as equal area; real
+cells shrink toward the poles (`cos(lat)`-weighted, same weighting already
+used for `dxlat_grid` in `constants.jl`). Changes diagnostic output numbers
+if fixed, so it needs the Fortran-comparison-plus-judgment treatment other
+`Investigated, not changed` findings got (§0's `log_eva==1` gust literal,
+`min_T_K`), not a mechanical fix.
+
 ---
 
 ## 5. Suggested order (low-risk → high-value)
 
-1. ~~§0 bug fixes~~ ✅ done — 17 across four passes, all with regression tests.
+1. ~~§0 bug fixes~~ ✅ done — 18 across five passes, all with regression tests.
 2. ~~Split into files (§1.2)~~, ~~state structs (§1.1)~~, ~~CI/compat/dead-deps/
    benchmark suite (§3)~~, ~~`RunSpec` (§1.4)~~ ✅ all done.
 3. ~~Thread the spatial operators (§2.4)~~ — attempted, benchmarked, reverted
    (3–6x slower at this grid size). ~~`Float32` (§2.3)~~ — analyzed, canceled
    before implementation.
-4. **Next up**: §1.3's remaining argument-collapsing; re-measure §2.5's
-   allocation hotspots now that §0.17's Jacobi fix changed `diffusion!`/
-   `advection!`'s codegen; `qflux_correction!`'s test-coverage gap (§3).
-5. The §4 findings needing domain/design input (§4.1, §4.2, §4.8, §4.10) —
-   bring in whoever knows the intended physics/API shape.
+4. ~~Cut `SWradiation!`'s allocation (§2.7)~~, ~~hot-loop/type-stability audit
+   (§2.8)~~, ~~precomputation audit (§2.9)~~, ~~test-suite cost audit (§3)~~,
+   ~~`Documenter.jl` site (§3)~~ ✅ all done.
+5. **Next up**: §1.3's remaining argument-collapsing; `qflux_correction!`'s
+   test-coverage gap (§3).
+6. The §4 findings needing domain/design input (§4.1, §4.2, §4.8, §4.10,
+   §4.11) — bring in whoever knows the intended physics/API shape.
 
 > ⚠️ Every performance change must be validated against a reference run —
 > "faster" only counts if output is unchanged within tolerance. Every
@@ -332,6 +424,31 @@ mechanical addition.
 
 ## Changelog of this document
 
+- **2026-08-06 (sixth pass: test-suite cost audit + allocation fix + doc
+  tooling)**: live-timed the full test suite (2m36.9s) and found a real,
+  currently-failing assertion (`min_T_K`'s float-literal equality, fixed
+  with `≈`); confirmed no testset duplicates another, trimmed the one safe
+  cut found (`co2_part` mask-reset test), and added a `RUN_GOLDEN` env var
+  to skip the golden snapshot test locally. Used the existing benchmark
+  harness plus `@allocated` (no `@profview` needed) to find and fix
+  `SWradiation!`'s 40704-byte/48-alloc hotspot — the entire allocation
+  footprint of `tendencies!` — with `@views`; every kernel now benchmarks
+  at 0 bytes. Audited hot-loop field/config localization, type stability,
+  and remaining caching/precomputation opportunities — both audits came
+  back clean, nothing left to change, documented as such (§2.8, §2.9).
+  Flagged (not fixed) `global_mean`'s missing `cos(lat)` area weighting as
+  a scientific-judgment question, same treatment as `min_T_K`/the gust
+  literal (§4.11). While wiring up a `Documenter.jl` site, found a real,
+  previously-unknown bug (§0.19): a `# ── notebook cell ── ` comment
+  between a docstring and its function/struct silently detaches the
+  docstring from Julia's doc system — affected 19 of 36 exports. Fixed by
+  moving the comment before the docstring everywhere it occurred (verified
+  with `Docs.hasdoc` across all exports, 0 missing after) and added the 3
+  docstrings that were genuinely absent (`xdim`/`ydim`/`nstep_yr`). Shipped
+  `docs/` (Documenter site: home page, tutorial adapted from
+  `examples/run_greb.jl`/README's Quick Start, `@autodocs` API reference)
+  and `.github/workflows/docs.yml` (deploys to GitHub Pages on push to
+  `main`).
 - **2026-08-06 (fifth pass: bug sweep + small fixes + compaction)**: fresh
   Fortran-audit sweep found 8 more real findings (§0.11–0.18, including one
   active in every default run — the `circulation!` `dX_conv` leak, §0.11), 7

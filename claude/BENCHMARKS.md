@@ -109,3 +109,24 @@ Reproduce: `julia --project=benchmark benchmark/run_benchmarks.jl "<tag>"`
 | `circulation!` | 8.443 ms | 10.871 ms | 354.75 KiB | 3456 |
 | `tendencies!` | 17.791 ms | 23.703 ms | 747.75 KiB | 6960 |
 
+---
+
+## 2026-08-06 13:27 — SWradiation! @views fix (0 allocs, was 40704 bytes/48 allocs)
+
+- branch: `improvements`  commit: `311c5bc` (dirty working tree)
+- data: real `greb_dataset_jld2/` (NCEP)
+- julia: `1.12.6`
+
+| kernel | min | median | memory | allocs |
+|---|---|---|---|---|
+| `convergence!` | 1.160 μs | 1.210 μs | 0 bytes | 0 |
+| `diffusion!` | 39.100 μs | 41.800 μs | 0 bytes | 0 |
+| `advection!` | 19.400 μs | 19.900 μs | 0 bytes | 0 |
+| `SWradiation!` | 14.400 μs | 14.800 μs | 0 bytes | 0 |
+| `LWradiation!` | 163.400 μs | 176.300 μs | 0 bytes | 0 |
+| `hydro!` | 26.200 μs | 27.300 μs | 0 bytes | 0 |
+| `seaice!` | 4.843 μs | 5.243 μs | 0 bytes | 0 |
+| `deep_ocean!` | 7.550 μs | 7.975 μs | 0 bytes | 0 |
+| `circulation!` | 1.575 ms | 1.695 ms | 0 bytes | 0 |
+| `tendencies!` | 3.306 ms | 4.375 ms | 0 bytes | 0 |
+
