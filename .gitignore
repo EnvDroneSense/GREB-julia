@@ -1,6 +1,7 @@
 # Julia package artifacts
 /Manifest.toml
 /test/Manifest.toml
+/benchmark/Manifest.toml
 /docs/build/
 /docs/Manifest.toml
 *.jl.cov
@@ -10,3 +11,7 @@
 
 # example outputs
 /examples/*.png
+
+# Local model input data (not committed — see DATA_README.md)
+/Data/
+/greb_dataset_jld2/

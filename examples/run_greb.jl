@@ -42,14 +42,15 @@ function run_greb(jld2_dir::AbstractString;
     end
 
     println("Loading GREB dataset from: ", jld2_dir)
-    load_greb_jld2!(jld2_dir; dataset=:ncep)
+    fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 
     # ── 2. configure the experiment (replaces the interactive widgets) ──────
     cfg = create_experiment_config(:full_model)
 
     # ── 3. run the model ────────────────────────────────────────────────────
     println("Running GREB (flux=$time_flux, ctrl=$time_ctrl, scnr=$time_scnr years)...")
-    result = greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir=jld2_dir)
+    run = RunSpec(flux=time_flux, ctrl=time_ctrl, scnr=time_scnr)
+    result = greb_model!(run, cfg; jld2_dir=jld2_dir, fields=fields)
     println("Run complete. control months: ", length(result.ctrl),
             ", scenario months: ", length(result.scnr))
 

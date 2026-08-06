@@ -1,0 +1,7 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+GREB = "128c3379-415a-4bc6-90bd-d536e37a6aec"
+
+[compat]
+Documenter = "1"
+julia = "1.9"
