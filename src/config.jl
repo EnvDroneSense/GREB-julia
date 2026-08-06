@@ -130,7 +130,9 @@ Initialize precipitation parameters `c_q, c_rq, c_omega, c_omegastd` based on
 """
 function set_hydrology_parameters!(cfg::PhysicsConfig)
     # Fast lookup instead of if-else chain
-    params = get(HYDRO_PARAMS, cfg.log_rain, (1.0, 0.0, 0.0, 0.0))
+    haskey(HYDRO_PARAMS, cfg.log_rain) ||
+        error("Unknown log_rain value: $(cfg.log_rain). Valid values: $(sort(collect(keys(HYDRO_PARAMS))))")
+    params = HYDRO_PARAMS[cfg.log_rain]
     cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd = params
 
     # NCEP parameter adjustment

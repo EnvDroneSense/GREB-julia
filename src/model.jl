@@ -4,6 +4,13 @@ function init_model!(cfg::PhysicsConfig)
     # ── Hydrology Parameter Initialization ────────────
     set_hydrology_parameters!(cfg)
 
+    # ── Reset regional CO₂ mask ───────────────────────
+    # co2_part is a module global only ever mutated by forcing()'s
+    # regional_co2_* branches; without this reset a regional experiment
+    # run earlier in the same session would leak its stale mask into any
+    # later, unrelated run.
+    co2_part .= 1.0
+
     # ── dTrad: offset between T_atm and radiation temperature ────
     @. dTrad = -0.16 * Tclim - 5.0
 

@@ -217,13 +217,11 @@ begin
     # 🌍 Spatial CO₂ masking arrays ────────────────────────────────
     # Spatial fraction for regional CO₂ experiments
     co2_part = ones(Float64, xdim, ydim)    # Regional CO₂ mask (1.0 = full CO₂, 0.5 = half CO₂)
-    co2_part_scn = ones(Float64, xdim, ydim) # Scenario-specific spatial mask
 end;
 
 # ── notebook cell 0dbfb663-46e7-4873-ac77-1e8e392fe69d  (orig lines 737-749, split: see constants.jl for the ΔT_AIR_FACTOR const from this cell) ──
 begin
     # ☀️ Solar forcing storage
-    global sw_solar_forcing_data = nothing  # Will hold (48, 730) array when loaded
     global sw_solar_forcing_state = Ref(1.0)  # Runtime solar multiplier used by SWradiation!
 
     # 🔧 Flux correction arrays (initialised with zeros, overwritten if files exist)

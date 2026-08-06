@@ -49,6 +49,71 @@ using Test
         @test (cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd) == (-1.27, 1.99, -16.54, 21.15)
     end
 
+    @testset "set_hydrology_parameters! errors on invalid log_rain" begin
+        # Regression: an out-of-range log_rain (e.g. a typo) used to silently
+        # fall back to the "Original GREB" parameters via get(dict, key, default)
+        # with no warning. Now it should fail loudly instead.
+        cfg = create_experiment_config(:full_model)
+        cfg.log_rain = 4
+        @test_throws ErrorException set_hydrology_parameters!(cfg)
+    end
+
+    @testset "circulation! do_conv gate matches cfg.log_conv (not inverted)" begin
+        # Regression: do_conv used to read `cfg.log_conv == 0` while every
+        # sibling flag (do_diff_v, do_diff_h, do_adv_v, do_adv_h) reads `== 1`.
+        # Since log_conv::Bool defaults to true, moisture-flux convergence was
+        # silently OFF for every default-configured run. Give omegaclim a
+        # nonzero pattern so convergence! has something to contribute, then
+        # confirm log_conv actually gates it (and in the right direction).
+        saved_omega = copy(GREB.omegaclim)
+        try
+            GREB.omegaclim .= 0.01
+            ts = TimeState(1, 1)
+            q_in = fill(0.01, GREB.xdim, GREB.ydim)
+            dq_on = similar(q_in)
+            dq_off = similar(q_in)
+
+            # Separate workspaces: convergence! only overwrites ws.dX_conv
+            # when do_conv is true, so a shared workspace would leak the
+            # "on" call's nonzero dX_conv into the "off" call's accumulation.
+            cfg_on = create_experiment_config(:full_model)
+            cfg_on.log_vdif = false
+            cfg_on.log_vadv = false
+            cfg_on.log_conv = true
+            circulation!(q_in, GREB.z_vapor, dq_on, CirculationWorkspace(), ts, cfg_on)
+
+            cfg_off = create_experiment_config(:full_model)
+            cfg_off.log_vdif = false
+            cfg_off.log_vadv = false
+            cfg_off.log_conv = false
+            circulation!(q_in, GREB.z_vapor, dq_off, CirculationWorkspace(), ts, cfg_off)
+
+            @test !all(iszero, dq_on)
+            @test all(iszero, dq_off)
+            @test dq_on != dq_off
+        finally
+            GREB.omegaclim .= saved_omega
+        end
+    end
+
+    @testset "co2_part regional CO2 mask resets between runs (no leak)" begin
+        # Regression: co2_part is a module global only ever mutated by
+        # forcing()'s regional_co2_* branches; nothing reset it at the start
+        # of a run, so a regional-CO2 experiment's masked values leaked into
+        # any later, unrelated run in the same session.
+        cfg_regional = PhysicsConfig(experiment=:regional_co2_nh)
+        redirect_stdout(devnull) do
+            greb_model!(0, 1, 1, cfg_regional; jld2_dir = "")
+        end
+        @test any(!=(1.0), GREB.co2_part)  # regional run actually changed the mask
+
+        cfg_plain = create_experiment_config(:full_model)
+        redirect_stdout(devnull) do
+            greb_model!(0, 1, 0, cfg_plain; jld2_dir = "")
+        end
+        @test all(==(1.0), GREB.co2_part)  # init_model! resets it back to full CO2
+    end
+
     @testset "workspaces & accumulators" begin
         ws = CirculationWorkspace()
         @test ws isa CirculationWorkspace

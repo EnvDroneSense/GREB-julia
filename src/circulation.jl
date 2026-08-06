@@ -1,15 +1,15 @@
 # ── notebook cell c6a0d656-8289-4f74-b8d8-f94c236e541d  (orig lines 1620-1637) ──
+"""Calculate moisture flux convergence using omega vertical velocity.
+
+	Implements Eq. 18 from Stassen et al 2019.
+
+	Args:
+		T1: Input field (typically specific humidity) [kg/kg]
+		omegaclim: Vertical velocity climatology [Pa/s]
+		timestate: Time state object
+		ws: Workspace for temporary arrays
+	"""
 function convergence!(T1, omegaclim, timestate, ws::CirculationWorkspace)
-    """Calculate moisture flux convergence using omega vertical velocity.
-
-    	Implements Eq. 18 from Stassen et al 2019.
-
-    	Args:
-    		T1: Input field (typically specific humidity) [kg/kg]
-    		omegaclim: Vertical velocity climatology [Pa/s]
-    		timestate: Time state object
-    		ws: Workspace for temporary arrays
-    	"""
     omega = @view omegaclim[:, :, timestate.ityr]
 
     @. ws.dX_conv = -T1 * omega * const_factor
@@ -287,11 +287,11 @@ function circulation!(X_in, h_scl, dX_out, ws::CirculationWorkspace, timestate, 
     end
 
     # Precompute flags (hoist conditionals)
-    do_diff_v = cfg.log_vdif == 1 && h_scl == z_vapor
-    do_diff_h = cfg.log_hdif == 1 && h_scl == z_air
-    do_adv_v = cfg.log_vadv == 1 && h_scl == z_vapor
-    do_adv_h = cfg.log_hadv == 1 && h_scl == z_air
-    do_conv = cfg.log_conv == 0 && h_scl == z_vapor
+    do_diff_v = cfg.log_vdif && h_scl == z_vapor
+    do_diff_h = cfg.log_hdif && h_scl == z_air
+    do_adv_v = cfg.log_vadv && h_scl == z_vapor
+    do_adv_h = cfg.log_hadv && h_scl == z_air
+    do_conv = cfg.log_conv && h_scl == z_vapor
 
     copyto!(ws.X_work, X_in)
 

@@ -21,7 +21,6 @@ module GREB
 # tendencies; tendencies+postprocess before model).
 # =============================================================================
 
-using Statistics
 using LoopVectorization   # @turbo SIMD
 using JLD2
 

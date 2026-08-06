@@ -53,8 +53,8 @@ function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::
 end
 
 # ── notebook cell f578f25e-047e-4a7e-8483-d544c7b4bec3  (orig lines 750-772) ──
+"""Load flux corrections from JLD2 files (zeros if missing)"""
 function load_flux_corrections_jld2!(jld2_dir::String)
-    """Load flux corrections from JLD2 files (zeros if missing)"""
     # Correction arrays are already defined as zeros in the global scope.
     correction_files = Dict(
         "Tsurf_flux_correction.jld2" => TF_correct,
@@ -76,9 +76,8 @@ function load_flux_corrections_jld2!(jld2_dir::String)
 end
 
 # ── notebook cell 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3  (orig lines 877-977) ──
+"""Load all GREB input data from JLD2 formatted files"""
 function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
-    """Load all GREB input data from JLD2 formatted files"""
-
     if !isdir(jld2_dir)
         error("JLD2 directory not found: $jld2_dir")
     end
