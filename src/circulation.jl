@@ -1,31 +1,33 @@
-# ── notebook cell c6a0d656-8289-4f74-b8d8-f94c236e541d  (orig lines 1620-1637) ──
-"""Calculate moisture flux convergence using omega vertical velocity.
+"""
+    convergence!(T1, fields::ClimateFields, timestate, ws::CirculationWorkspace)
 
-	Implements Eq. 18 from Stassen et al 2019.
+Calculate moisture flux convergence using omega vertical velocity.
 
-	Args:
-		T1: Input field (typically specific humidity) [kg/kg]
-		omegaclim: Vertical velocity climatology [Pa/s]
-		timestate: Time state object
-		ws: Workspace for temporary arrays
-	"""
-function convergence!(T1, omegaclim, timestate, ws::CirculationWorkspace)
-    omega = @view omegaclim[:, :, timestate.ityr]
+Implements Eq. 18 from Stassen et al 2019.
+
+Args:
+    T1: Input field (typically specific humidity) [kg/kg]
+    fields: loaded climatology (reads `fields.omegaclim`)
+    timestate: Time state object
+    ws: Workspace for temporary arrays
+"""
+function convergence!(T1, fields::ClimateFields, timestate, ws::CirculationWorkspace)
+    omega = @view fields.omegaclim[:, :, timestate.ityr]
 
     @. ws.dX_conv = -T1 * omega * const_factor
     return nothing
 end
 
 # ── notebook cell ba96178d-77d4-4f26-a94f-5ad43c5242db  (orig lines 1777-1888) ──
-function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
+function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate)
     # Zero output buffer (we will accumulate into it)
     fill!(ws.dX_diff, 0.0)
 
     # Topographic scaling (choose based on scale height)
     wz = if h_scl == z_air
-        wz_air
+        fields.wz_air
     elseif h_scl == z_vapor
-        wz_vapor
+        fields.wz_vapor
     else
         error("Invalid h_scl = $h_scl (must be z_air or z_vapor)")
     end
@@ -135,7 +137,7 @@ function diffusion!(T1, h_scl, ws::CirculationWorkspace, timestate)
 end
 
 # ── notebook cell 2bab06b9-ca98-4142-99cb-d2ad4f1cde93  (orig lines 1903-2046) ──
-function advection!(T1, h_scl, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
+function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
     # Disable advection for water vapour or heat according to switches
     if (h_scl == z_vapor && !cfg.log_vadv) || (h_scl == z_air && !cfg.log_hadv)
         fill!(ws.dX_adv, 0.0)
@@ -146,16 +148,16 @@ function advection!(T1, h_scl, ws::CirculationWorkspace, timestate, cfg::Physics
     fill!(ws.dX_adv, 0.0)
 
     # Extract 2D views for current time step
-    vclim_p_t = @view vclim_p[:, :, timestate.ityr]
-    vclim_m_t = @view vclim_m[:, :, timestate.ityr]
-    uclim_p_t = @view uclim_p[:, :, timestate.ityr]
-    uclim_m_t = @view uclim_m[:, :, timestate.ityr]
+    vclim_p_t = @view fields.vclim_p[:, :, timestate.ityr]
+    vclim_m_t = @view fields.vclim_m[:, :, timestate.ityr]
+    uclim_p_t = @view fields.uclim_p[:, :, timestate.ityr]
+    uclim_m_t = @view fields.uclim_m[:, :, timestate.ityr]
 
     # Topographic scaling (choose based on scale height)
     wz = if h_scl == z_air
-        wz_air
+        fields.wz_air
     elseif h_scl == z_vapor
-        wz_vapor
+        fields.wz_vapor
     else
         error("Invalid h_scl = $h_scl (must be z_air or z_vapor)")
     end
@@ -279,7 +281,7 @@ function advection!(T1, h_scl, ws::CirculationWorkspace, timestate, cfg::Physics
 end
 
 # ── notebook cell db75ea52-9387-4c15-bde5-61777ac9b570  (orig lines 2047-2079) ──
-function circulation!(X_in, h_scl, dX_out, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
+function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
     # Early exit if atmospheric processes disabled
     if (!cfg.log_atmos_dmc || !cfg.log_crcl_dmc || !cfg.log_crcl_drsp)
         fill!(dX_out, 0.0)
@@ -296,11 +298,11 @@ function circulation!(X_in, h_scl, dX_out, ws::CirculationWorkspace, timestate, 
     copyto!(ws.X_work, X_in)
 
     for _tt in 1:ntime
-        do_diff_v && diffusion!(ws.X_work, h_scl, ws, timestate)
-        do_diff_h && diffusion!(ws.X_work, h_scl, ws, timestate)
-        do_adv_v && advection!(ws.X_work, h_scl, ws, timestate, cfg)
-        do_adv_h && advection!(ws.X_work, h_scl, ws, timestate, cfg)
-        do_conv && convergence!(ws.X_work, omegaclim, timestate, ws)
+        do_diff_v && diffusion!(ws.X_work, h_scl, fields, ws, timestate)
+        do_diff_h && diffusion!(ws.X_work, h_scl, fields, ws, timestate)
+        do_adv_v && advection!(ws.X_work, h_scl, fields, ws, timestate, cfg)
+        do_adv_h && advection!(ws.X_work, h_scl, fields, ws, timestate, cfg)
+        do_conv && convergence!(ws.X_work, fields, timestate, ws)
 
         @. ws.X_work += ws.dX_diff + ws.dX_adv + ws.dX_conv
     end

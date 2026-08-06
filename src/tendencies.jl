@@ -1,12 +1,12 @@
 # ── notebook cell e493fae7-239a-494c-9a59-728446d70f7a  (orig lines 2080-2127) ──
-function tendencies!(CO2, Ts, Ta, To, q, ws::CirculationWorkspace,
+function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelState, ws::CirculationWorkspace,
     timestate, cfg::PhysicsConfig)
 
     # Short-wave radiation → albedo, SW flux
-    sw_out = SWradiation!(Ts, timestate, cfg, ws)
+    sw_out = SWradiation!(Ts, fields, state, timestate, cfg, ws)
 
     # Long-wave radiation → LW_surf, LW_up, LW_down, emissivity
-    lw_out = LWradiation!(Ts, Ta, q, CO2, timestate, cfg, ws)
+    lw_out = LWradiation!(Ts, Ta, q, CO2, fields, timestate, cfg, ws)
 
     # Sensible heat flux
     Q_sens = ws.Q_sens_buf
@@ -17,16 +17,16 @@ function tendencies!(CO2, Ts, Ta, To, q, ws::CirculationWorkspace,
     end
 
     # Hydrological cycle → latent heat + evaporation/rain tendencies
-    hy_out = hydro!(Ts, q, timestate, cfg, ws)
+    hy_out = hydro!(Ts, q, fields, timestate, cfg, ws)
 
     # Atmospheric circulation — temperature diffusion/advection
-    circulation!(Ta, z_air, ws.dTa_crcl, ws, timestate, cfg)
+    circulation!(Ta, z_air, ws.dTa_crcl, fields, ws, timestate, cfg)
 
     # Atmospheric circulation — water-vapour diffusion/advection
-    circulation!(q, z_vapor, ws.dq_crcl, ws, timestate, cfg)
+    circulation!(q, z_vapor, ws.dq_crcl, fields, ws, timestate, cfg)
 
     # Deep ocean coupling
-    do_out = deep_ocean!(Ts, To, timestate, cfg, ws)
+    do_out = deep_ocean!(Ts, To, fields, timestate, cfg, ws)
 
     return (albedo=sw_out.albedo,
         SW=sw_out.SW,
@@ -47,7 +47,7 @@ function tendencies!(CO2, Ts, Ta, To, q, ws::CirculationWorkspace,
 end
 
 # ── notebook cell 1894ad94-cdf8-4e79-a0e5-b72088db31be  (orig lines 2162-2343) ──
-function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
+function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
     CO2 = cfg.co2_concentration
     sw_solar_forcing = 1.0
@@ -152,6 +152,7 @@ function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
 
         # 🌍 Regional/partial CO₂ experiments ────────────────────────────────────
     elseif startswith(string(cfg.experiment), "regional_co2_")
+        co2_part = fields.co2_part
         # Reset co2_part to full CO₂ first
         co2_part .= 1.0
 
@@ -187,6 +188,7 @@ function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
         elseif cfg.experiment == :regional_co2_ocean
             # 2×CO₂ Ocean only
             CO2 = 680.0
+            z_topo = fields.z_topo
             for j in 1:ydim, i in 1:xdim
                 if z_topo[i, j] > 0.0
                     co2_part[i, j] = 0.5
@@ -202,6 +204,7 @@ function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
         elseif cfg.experiment == :regional_co2_land_ice
             # 2×CO₂ Land/Ice only
             CO2 = 680.0
+            z_topo = fields.z_topo
             for j in 1:ydim, i in 1:xdim
                 if z_topo[i, j] <= 0.0
                     co2_part[i, j] = 0.5

@@ -65,53 +65,55 @@ using Test
         # silently OFF for every default-configured run. Give omegaclim a
         # nonzero pattern so convergence! has something to contribute, then
         # confirm log_conv actually gates it (and in the right direction).
-        saved_omega = copy(GREB.omegaclim)
-        try
-            GREB.omegaclim .= 0.01
-            ts = TimeState(1, 1)
-            q_in = fill(0.01, GREB.xdim, GREB.ydim)
-            dq_on = similar(q_in)
-            dq_off = similar(q_in)
+        fields = ClimateFields()
+        fields.omegaclim .= 0.01
+        ts = TimeState(1, 1)
+        q_in = fill(0.01, GREB.xdim, GREB.ydim)
+        dq_on = similar(q_in)
+        dq_off = similar(q_in)
 
-            # Separate workspaces: convergence! only overwrites ws.dX_conv
-            # when do_conv is true, so a shared workspace would leak the
-            # "on" call's nonzero dX_conv into the "off" call's accumulation.
-            cfg_on = create_experiment_config(:full_model)
-            cfg_on.log_vdif = false
-            cfg_on.log_vadv = false
-            cfg_on.log_conv = true
-            circulation!(q_in, GREB.z_vapor, dq_on, CirculationWorkspace(), ts, cfg_on)
+        # Separate workspaces: convergence! only overwrites ws.dX_conv
+        # when do_conv is true, so a shared workspace would leak the
+        # "on" call's nonzero dX_conv into the "off" call's accumulation.
+        cfg_on = create_experiment_config(:full_model)
+        cfg_on.log_vdif = false
+        cfg_on.log_vadv = false
+        cfg_on.log_conv = true
+        circulation!(q_in, GREB.z_vapor, dq_on, fields, CirculationWorkspace(), ts, cfg_on)
 
-            cfg_off = create_experiment_config(:full_model)
-            cfg_off.log_vdif = false
-            cfg_off.log_vadv = false
-            cfg_off.log_conv = false
-            circulation!(q_in, GREB.z_vapor, dq_off, CirculationWorkspace(), ts, cfg_off)
+        cfg_off = create_experiment_config(:full_model)
+        cfg_off.log_vdif = false
+        cfg_off.log_vadv = false
+        cfg_off.log_conv = false
+        circulation!(q_in, GREB.z_vapor, dq_off, fields, CirculationWorkspace(), ts, cfg_off)
 
-            @test !all(iszero, dq_on)
-            @test all(iszero, dq_off)
-            @test dq_on != dq_off
-        finally
-            GREB.omegaclim .= saved_omega
-        end
+        @test !all(iszero, dq_on)
+        @test all(iszero, dq_off)
+        @test dq_on != dq_off
     end
 
     @testset "co2_part regional CO2 mask resets between runs (no leak)" begin
-        # Regression: co2_part is a module global only ever mutated by
-        # forcing()'s regional_co2_* branches; nothing reset it at the start
-        # of a run, so a regional-CO2 experiment's masked values leaked into
-        # any later, unrelated run in the same session.
+        # Regression: co2_part used to be a module global only ever mutated by
+        # forcing()'s regional_co2_* branches, with nothing resetting it at the
+        # start of a run, so a regional-CO2 experiment's masked values leaked
+        # into any later, unrelated run in the same session. Now co2_part lives
+        # on ClimateFields (per IMPROVEMENTS.md §1.1's state-struct refactor);
+        # by default greb_model! builds a fresh instance per call so this can't
+        # happen at all, but init_model! still resets it defensively for the
+        # case where a caller explicitly reuses one `fields` across calls
+        # (e.g. to avoid reloading real climatology) — exercise that case here.
+        fields = ClimateFields()
         cfg_regional = PhysicsConfig(experiment=:regional_co2_nh)
         redirect_stdout(devnull) do
-            greb_model!(0, 1, 1, cfg_regional; jld2_dir = "")
+            greb_model!(0, 1, 1, cfg_regional; jld2_dir = "", fields = fields)
         end
-        @test any(!=(1.0), GREB.co2_part)  # regional run actually changed the mask
+        @test any(!=(1.0), fields.co2_part)  # regional run actually changed the mask
 
         cfg_plain = create_experiment_config(:full_model)
         redirect_stdout(devnull) do
-            greb_model!(0, 1, 0, cfg_plain; jld2_dir = "")
+            greb_model!(0, 1, 0, cfg_plain; jld2_dir = "", fields = fields)
         end
-        @test all(==(1.0), GREB.co2_part)  # init_model! resets it back to full CO2
+        @test all(==(1.0), fields.co2_part)  # init_model! resets it back to full CO2
     end
 
     @testset "workspaces & accumulators" begin
@@ -171,34 +173,24 @@ using Test
         # wind/wetness climatology a nonzero, non-uniform pattern so the
         # different wind-gust/coefficient parameterizations actually diverge,
         # then confirm all four log_eva values produce different dq_eva.
-        saved_u = copy(GREB.uclim)
-        saved_v = copy(GREB.vclim)
-        saved_swet = copy(GREB.swetclim)
-        saved_ws = copy(GREB.wsclim)
-        try
-            GREB.uclim .= 3.0
-            GREB.vclim .= 2.0
-            GREB.swetclim .= 0.5
-            GREB.wsclim .= 4.0
+        fields = ClimateFields()
+        fields.uclim .= 3.0
+        fields.vclim .= 2.0
+        fields.swetclim .= 0.5
+        fields.wsclim .= 4.0
 
-            Ts = fill(290.0, GREB.xdim, GREB.ydim)
-            q = fill(0.005, GREB.xdim, GREB.ydim)
-            ts = TimeState(1, 1)
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.005, GREB.xdim, GREB.ydim)
+        ts = TimeState(1, 1)
 
-            outputs = map((-1, 0, 1, 2)) do log_eva
-                cfg = create_experiment_config(:full_model)
-                cfg.log_eva = log_eva
-                copy(hydro!(Ts, q, ts, cfg, CirculationWorkspace()).dq_eva)
-            end
+        outputs = map((-1, 0, 1, 2)) do log_eva
+            cfg = create_experiment_config(:full_model)
+            cfg.log_eva = log_eva
+            copy(hydro!(Ts, q, fields, ts, cfg, CirculationWorkspace()).dq_eva)
+        end
 
-            for i in 1:length(outputs), j in (i+1):length(outputs)
-                @test outputs[i] != outputs[j]
-            end
-        finally
-            GREB.uclim .= saved_u
-            GREB.vclim .= saved_v
-            GREB.swetclim .= saved_swet
-            GREB.wsclim .= saved_ws
+        for i in 1:length(outputs), j in (i+1):length(outputs)
+            @test outputs[i] != outputs[j]
         end
     end
 
@@ -207,7 +199,7 @@ using Test
         q = fill(0.005, GREB.xdim, GREB.ydim)
         cfg = create_experiment_config(:full_model)
         cfg.log_eva = 99
-        @test_throws ErrorException hydro!(Ts, q, TimeState(1, 1), cfg, CirculationWorkspace())
+        @test_throws ErrorException hydro!(Ts, q, ClimateFields(), TimeState(1, 1), cfg, CirculationWorkspace())
     end
 
     @testset "init_model! drsp climatology overrides use the correct switches" begin
@@ -217,23 +209,15 @@ using Test
         # log_clouds_drsp -> cldclim=0.7 override at all — all three verified
         # against the Fortran reference's `if(log_cloud_drsp==0) cldclim=0.7`
         # / `log_humid_drsp` / `log_ocean_drsp` block.
-        saved_cld = copy(GREB.cldclim)
-        saved_q = copy(GREB.qclim)
-        saved_mld = copy(GREB.mldclim)
-        try
-            cfg = create_experiment_config(:full_model)
-            cfg.log_clouds_drsp = false
-            cfg.log_humid_drsp = false
-            cfg.log_ocean_drsp = false
-            init_model!(cfg)
-            @test all(==(0.7), GREB.cldclim)
-            @test all(==(0.0052), GREB.qclim)
-            @test all(==(GREB.d_ocean), GREB.mldclim)
-        finally
-            GREB.cldclim .= saved_cld
-            GREB.qclim .= saved_q
-            GREB.mldclim .= saved_mld
-        end
+        fields = ClimateFields()
+        cfg = create_experiment_config(:full_model)
+        cfg.log_clouds_drsp = false
+        cfg.log_humid_drsp = false
+        cfg.log_ocean_drsp = false
+        init_model!(cfg, fields)
+        @test all(==(0.7), fields.cldclim)
+        @test all(==(0.0052), fields.qclim)
+        @test all(==(GREB.d_ocean), fields.mldclim)
     end
 
     @testset "LWradiation! log_atmos_dmc==false only zeros LW_down, not LW_up" begin
@@ -242,6 +226,7 @@ using Test
         # snapshotted before the conditional zeroing and stays at its full
         # computed value (decouples surface from atmospheric downwelling
         # feedback without touching the atmosphere's own emission term).
+        fields = ClimateFields()
         ts = TimeState(1, 1)
         Ts = fill(290.0, GREB.xdim, GREB.ydim)
         Ta = fill(280.0, GREB.xdim, GREB.ydim)
@@ -249,11 +234,11 @@ using Test
         CO2 = 340.0
 
         cfg_on = create_experiment_config(:full_model)
-        out_on = LWradiation!(Ts, Ta, q, CO2, ts, cfg_on, CirculationWorkspace())
+        out_on = LWradiation!(Ts, Ta, q, CO2, fields, ts, cfg_on, CirculationWorkspace())
 
         cfg_off = create_experiment_config(:full_model)
         cfg_off.log_atmos_dmc = false
-        out_off = LWradiation!(Ts, Ta, q, CO2, ts, cfg_off, CirculationWorkspace())
+        out_off = LWradiation!(Ts, Ta, q, CO2, fields, ts, cfg_off, CirculationWorkspace())
 
         @test all(iszero, out_off.LW_down)
         @test !all(iszero, out_off.LW_up)
@@ -264,10 +249,12 @@ using Test
         # Regression: paleo/orbital experiments never actually loaded the
         # alternate solar-forcing table despite load_solar_forcing_jld2
         # existing for exactly this purpose (Fortran: `sw_solar =
-        # sw_solar_scnr`). Since sw_solar is a shared module global (same
-        # leak hazard class as the co2_part bug), also confirm it's restored
-        # after the run and doesn't leak into a later, unrelated run.
-        saved_sw_solar = copy(GREB.sw_solar)
+        # sw_solar_scnr`). sw_solar now lives on ClimateFields; exercise the
+        # explicit-fields-reuse case (see the co2_part test above) to confirm
+        # a paleo run's swapped table doesn't leak into a later run against
+        # the same `fields` instance.
+        fields = ClimateFields()
+        saved_sw_solar = copy(fields.sw_solar)
         tmpdir = mktempdir()
         try
             mkpath(joinpath(tmpdir, "solar_scenarios"))
@@ -280,7 +267,7 @@ using Test
             cfg = create_experiment_config(:paleo_231kyr)
             captured = mktemp() do path, io
                 result = redirect_stdout(io) do
-                    greb_model!(0, 1, 1, cfg; jld2_dir = tmpdir)
+                    greb_model!(0, 1, 1, cfg; jld2_dir = tmpdir, fields = fields)
                 end
                 flush(io)
                 (result = result, text = read(path, String))
@@ -293,15 +280,14 @@ using Test
             @test occursin("loading alternate solar forcing", captured.text)
 
             # sw_solar restored to its pre-run value after greb_model! returns
-            @test GREB.sw_solar == saved_sw_solar
+            @test fields.sw_solar == saved_sw_solar
 
             cfg_plain = create_experiment_config(:full_model)
             redirect_stdout(devnull) do
-                greb_model!(0, 1, 0, cfg_plain; jld2_dir = "")
+                greb_model!(0, 1, 0, cfg_plain; jld2_dir = "", fields = fields)
             end
-            @test GREB.sw_solar == saved_sw_solar
+            @test fields.sw_solar == saved_sw_solar
         finally
-            GREB.sw_solar .= saved_sw_solar
             rm(tmpdir; recursive = true, force = true)
         end
     end

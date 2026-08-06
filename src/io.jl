@@ -53,13 +53,12 @@ function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::
 end
 
 # ── notebook cell f578f25e-047e-4a7e-8483-d544c7b4bec3  (orig lines 750-772) ──
-"""Load flux corrections from JLD2 files (zeros if missing)"""
-function load_flux_corrections_jld2!(jld2_dir::String)
-    # Correction arrays are already defined as zeros in the global scope.
+"""Load flux corrections from JLD2 files into `fields` (zeros if missing)"""
+function load_flux_corrections_jld2!(jld2_dir::String, fields::ClimateFields)
     correction_files = Dict(
-        "Tsurf_flux_correction.jld2" => TF_correct,
-        "vapour_flux_correction.jld2" => qF_correct,
-        "Tocean_flux_correction.jld2" => ToF_correct
+        "Tsurf_flux_correction.jld2" => fields.TF_correct,
+        "vapour_flux_correction.jld2" => fields.qF_correct,
+        "Tocean_flux_correction.jld2" => fields.ToF_correct
     )
 
     for (filename, array) in correction_files
@@ -76,19 +75,21 @@ function load_flux_corrections_jld2!(jld2_dir::String)
 end
 
 # ── notebook cell 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3  (orig lines 877-977) ──
-"""Load all GREB input data from JLD2 formatted files"""
+"""Load all GREB input data from JLD2 formatted files, returning a fresh [`ClimateFields`](@ref)"""
 function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
     if !isdir(jld2_dir)
         error("JLD2 directory not found: $jld2_dir")
     end
 
+    fields = ClimateFields()
+
     # Static 2D files
     println("📂 Loading static fields...")
     topo_result = read_jld2(joinpath(jld2_dir, "static", "global.topography.jld2"))
-    global z_topo .= topo_result.data
+    fields.z_topo .= topo_result.data
 
     glacier_result = read_jld2(joinpath(jld2_dir, "static", "greb.glaciers.jld2"))
-    global glacier .= glacier_result.data
+    fields.glacier .= glacier_result.data
 
     # Dataset-specific file mapping
     file_map = Dict(
@@ -116,40 +117,40 @@ function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
 
     # Load each variable individually with unique result names
     tsurf_result = read_jld2(joinpath(climatology_dir, files["Tclim"]))
-    global Tclim .= tsurf_result.data
+    fields.Tclim .= tsurf_result.data
 
     uwind_result = read_jld2(joinpath(climatology_dir, files["uclim"]))
-    global uclim .= uwind_result.data
+    fields.uclim .= uwind_result.data
 
     vwind_result = read_jld2(joinpath(climatology_dir, files["vclim"]))
-    global vclim .= vwind_result.data
+    fields.vclim .= vwind_result.data
 
     humid_result = read_jld2(joinpath(climatology_dir, files["qclim"]))
-    global qclim .= humid_result.data
+    fields.qclim .= humid_result.data
 
     swet_result = read_jld2(joinpath(climatology_dir, files["swetclim"]))
-    global swetclim .= swet_result.data
+    fields.swetclim .= swet_result.data
 
     # Common climatology files
     println("📂 Loading common climatology fields...")
 
     cld_result = read_jld2(joinpath(climatology_dir, "isccp.cloud_cover.clim.jld2"))
-    global cldclim .= cld_result.data
+    fields.cldclim .= cld_result.data
 
     mld_result = read_jld2(joinpath(climatology_dir, "woce.ocean_mixed_layer_depth.clim.jld2"))
-    global mldclim .= mld_result.data
+    fields.mldclim .= mld_result.data
 
     tocean_result = read_jld2(joinpath(climatology_dir, "Tocean.clim.jld2"))
-    global Toclim .= tocean_result.data
+    fields.Toclim .= tocean_result.data
 
     omega_result = read_jld2(joinpath(climatology_dir, "erainterim.omega.vertmean.clim.jld2"))
-    global omegaclim .= omega_result.data
+    fields.omegaclim .= omega_result.data
 
     omegastd_result = read_jld2(joinpath(climatology_dir, "erainterim.omega_std.vertmean.clim.jld2"))
-    global omegastdclim .= omegastd_result.data
+    fields.omegastdclim .= omegastd_result.data
 
     ws_result = read_jld2(joinpath(climatology_dir, "erainterim.windspeed.850hpa.clim.jld2"))
-    global wsclim .= ws_result.data
+    fields.wsclim .= ws_result.data
 
     # Solar radiation (special: lat × time)
     println("📂 Loading solar radiation...")
@@ -157,20 +158,21 @@ function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
     if isfile(solar_path)
         solar_result = read_jld2(solar_path)
         @assert size(solar_result.data) == (ydim, nstep_yr) "Wrong solar dimensions"
-        global sw_solar .= solar_result.data
+        fields.sw_solar .= solar_result.data
     else
         error("Solar radiation file not found: $solar_path")
     end
 
     # Optional: Load flux corrections
     println("📂 Loading flux corrections...")
-    load_flux_corrections_jld2!(jld2_dir)
+    load_flux_corrections_jld2!(jld2_dir, fields)
 
     # Update wind sign splits
-    @. uclim_m = ifelse(uclim >= 0.0, uclim, 0.0)
-    @. uclim_p = ifelse(uclim < 0.0, uclim, 0.0)
-    @. vclim_m = ifelse(vclim >= 0.0, vclim, 0.0)
-    @. vclim_p = ifelse(vclim < 0.0, vclim, 0.0)
+    @. fields.uclim_m = ifelse(fields.uclim >= 0.0, fields.uclim, 0.0)
+    @. fields.uclim_p = ifelse(fields.uclim < 0.0, fields.uclim, 0.0)
+    @. fields.vclim_m = ifelse(fields.vclim >= 0.0, fields.vclim, 0.0)
+    @. fields.vclim_p = ifelse(fields.vclim < 0.0, fields.vclim, 0.0)
 
     println("✅ All GREB data loaded successfully from JLD2")
+    return fields
 end

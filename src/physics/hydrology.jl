@@ -1,5 +1,5 @@
 # ── notebook cell 606032a2-b2ca-4fd8-9930-afd83aecec7a  (orig lines 1495-1608) ──
-function hydro!(Ts, q, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
+function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     c_q = cfg.c_q
     c_rq = cfg.c_rq
     c_omega = cfg.c_omega
@@ -15,11 +15,14 @@ function hydro!(Ts, q, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
             dq_eva=ws.dq_eva_buf, dq_rain=ws.dq_rain_buf)
     end
 
-    u = @view uclim[:, :, timestate.ityr]
-    v = @view vclim[:, :, timestate.ityr]
-    swet = @view swetclim[:, :, timestate.ityr]
-    omega = @view omegaclim[:, :, timestate.ityr]
-    omegastd = @view omegastdclim[:, :, timestate.ityr]
+    z_topo = fields.z_topo
+    wz_air = fields.wz_air
+    wz_vapor = fields.wz_vapor
+    u = @view fields.uclim[:, :, timestate.ityr]
+    v = @view fields.vclim[:, :, timestate.ityr]
+    swet = @view fields.swetclim[:, :, timestate.ityr]
+    omega = @view fields.omegaclim[:, :, timestate.ityr]
+    omegastd = @view fields.omegastdclim[:, :, timestate.ityr]
 
     const_factor1 = 3.75e-3
     const_factor2 = 17.08085
@@ -51,7 +54,7 @@ function hydro!(Ts, q, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
             end
         end
     elseif cfg.log_eva == 0
-        ws_view = @view wsclim[:, :, timestate.ityr]
+        ws_view = @view fields.wsclim[:, :, timestate.ityr]
         @turbo for j in 1:ydim
             for i in 1:xdim
                 ws.Tskin[i, j] = ifelse(z_topo[i, j] > 0.0, Ts[i, j] + 5.0, Ts[i, j] + 1.0)
@@ -82,7 +85,7 @@ function hydro!(Ts, q, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
             end
         end
     elseif cfg.log_eva == 2
-        ws_view = @view wsclim[:, :, timestate.ityr]
+        ws_view = @view fields.wsclim[:, :, timestate.ityr]
         gust_land_2 = 81.0  # 9.0^2
         gust_ocean_2 = 16.0  # 4.0^2
         @turbo for j in 1:ydim

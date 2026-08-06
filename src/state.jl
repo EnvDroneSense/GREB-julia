@@ -212,86 +212,92 @@ begin
     end
 end;
 
-# ── notebook cell f39520b7-a246-4980-b8b9-0215367d0b46  (orig lines 630-637) ──
-begin
-    # 🌍 Spatial CO₂ masking arrays ────────────────────────────────
-    # Spatial fraction for regional CO₂ experiments
-    co2_part = ones(Float64, xdim, ydim)    # Regional CO₂ mask (1.0 = full CO₂, 0.5 = half CO₂)
-end;
+# ── State structs (GREB.jl IMPROVEMENTS.md §1.1) ──
+# Replaces the ~35 mutable module-level globals that used to live here
+# (climatology, derived grid fields, flux corrections, the regional-CO2
+# mask, and the solar table) with one struct built by load_greb_jld2!/
+# load_flux_corrections_jld2! and threaded explicitly through every
+# physics/circulation/tendencies/model function as a `fields` argument.
+"""
+    ClimateFields
 
-# ── notebook cell 0dbfb663-46e7-4873-ac77-1e8e392fe69d  (orig lines 737-749, split: see constants.jl for the ΔT_AIR_FACTOR const from this cell) ──
-begin
-    # ☀️ Solar forcing storage
-    global sw_solar_forcing_state = Ref(1.0)  # Runtime solar multiplier used by SWradiation!
+Loaded climatology, derived grid fields, flux corrections, and the
+regional-CO2 mask/solar table — everything `load_greb_jld2!` fills in and
+every physics function reads. One instance per `greb_model!` run; never
+shared as global state.
+"""
+mutable struct ClimateFields
+    # 🗺️ 2D fields (xdim, ydim)
+    z_topo::Matrix{Float64}      # topography [m] (<0: ocean)
+    glacier::Matrix{Float64}     # glacier mask (>0.5: glacier)
+    z_ocean::Matrix{Float64}     # derived ocean depth [m]
+    cap_surf::Matrix{Float64}    # surface heat capacity [J/K/m²]
+    wz_air::Matrix{Float64}      # exp(-z_topo / z_air)
+    wz_vapor::Matrix{Float64}    # exp(-z_topo / z_vapor)
 
-    # 🔧 Flux correction arrays (initialised with zeros, overwritten if files exist)
-    global TF_correct = zeros(Float64, xdim, ydim, nstep_yr)
-    global qF_correct = zeros(Float64, xdim, ydim, nstep_yr)
-    global ToF_correct = zeros(Float64, xdim, ydim, nstep_yr)
-end;
+    # 🌡️ 3D climate fields (xdim, ydim, nstep_yr)
+    Tclim::Array{Float64,3}      # surface temperature [K]
+    uclim::Array{Float64,3}      # zonal wind [m/s]
+    vclim::Array{Float64,3}      # meridional wind [m/s]
+    qclim::Array{Float64,3}      # atmospheric humidity [kg/kg]
+    mldclim::Array{Float64,3}    # mixed-layer depth [m]
+    omegaclim::Array{Float64,3}    # vertical velocity [Pa/s]
+    omegastdclim::Array{Float64,3} # omega std deviation [Pa/s]
+    wsclim::Array{Float64,3}       # wind speed [m/s]
 
-# ── notebook cell 75f3b78f-924a-4a65-b2e3-a79c6f2082f9  (orig lines 814-824) ──
-begin
-    # 🗺️ 2D fields (xdim, ydim) ──────────────────────────────────────
-    z_topo = zeros(Float64, xdim, ydim)  # topography [m] (<0: ocean)
-    glacier = zeros(Float64, xdim, ydim)  # glacier mask (>0.5: glacier)
-    z_ocean = zeros(Float64, xdim, ydim)  # derived ocean depth [m]
-    cap_surf = zeros(Float64, xdim, ydim)  # surface heat capacity [J/K/m²]
-    wz_air = zeros(Float64, xdim, ydim)  # exp(-z_topo / z_air)
-    wz_vapor = zeros(Float64, xdim, ydim)  # exp(-z_topo / z_vapor)
-end;
+    # 📊 Anomaly fields for ENSO/climate-change experiments
+    Tclim_anom_enso::Array{Float64,3}
+    uclim_anom_enso::Array{Float64,3}
+    vclim_anom_enso::Array{Float64,3}
+    omegaclim_anom_enso::Array{Float64,3}
+    wsclim_anom_enso::Array{Float64,3}
+    Tclim_anom_cc::Array{Float64,3}
+    uclim_anom_cc::Array{Float64,3}
+    vclim_anom_cc::Array{Float64,3}
+    omegaclim_anom_cc::Array{Float64,3}
+    wsclim_anom_cc::Array{Float64,3}
 
-# ── notebook cell 0be9bc61-1a59-4dfe-84f9-bb1a27ca30fc  (orig lines 825-869) ──
-begin
-    # 🌡️ 3D climate fields (xdim, ydim, nstep_yr) ───────────────────
-    Tclim = zeros(Float64, xdim, ydim, nstep_yr)   # surface temperature [K]
-    uclim = zeros(Float64, xdim, ydim, nstep_yr)   # zonal wind [m/s]
-    vclim = zeros(Float64, xdim, ydim, nstep_yr)   # meridional wind [m/s]
-    qclim = zeros(Float64, xdim, ydim, nstep_yr)   # atmospheric humidity [kg/kg]
-    mldclim = zeros(Float64, xdim, ydim, nstep_yr)   # mixed-layer depth [m]
+    # 🌬️ Precomputed wind sign splits
+    uclim_m::Array{Float64,3}    # negative u components
+    uclim_p::Array{Float64,3}    # positive u components
+    vclim_m::Array{Float64,3}    # negative v components
+    vclim_p::Array{Float64,3}    # positive v components
 
-    # additional climatology fields
-    omegaclim = zeros(Float64, xdim, ydim, nstep_yr) # vertical velocity [Pa/s]
-    omegastdclim = zeros(Float64, xdim, ydim, nstep_yr) # omega std deviation [Pa/s]
-    wsclim = zeros(Float64, xdim, ydim, nstep_yr) # wind speed [m/s]
+    Toclim::Array{Float64,3}     # deep ocean temperature [K]
+    cldclim::Array{Float64,3}    # cloud cover fraction
+    swetclim::Array{Float64,3}   # soil wetness [0-1]
 
-    # 📊 Anomaly Fields for ENSO/Climate Change Experiments ────────────────
-    # ENSO anomaly fields
-    Tclim_anom_enso = zeros(Float64, xdim, ydim, nstep_yr) # surface temperature [K]
-    uclim_anom_enso = zeros(Float64, xdim, ydim, nstep_yr) # zonal wind [m/s]
-    vclim_anom_enso = zeros(Float64, xdim, ydim, nstep_yr) # meridional wind [m/s]
-    omegaclim_anom_enso = zeros(Float64, xdim, ydim, nstep_yr) # vertical velocity [Pa/s]
-    wsclim_anom_enso = zeros(Float64, xdim, ydim, nstep_yr) # wind speed [m/s]
+    # ☀️ Solar / radiation
+    sw_solar::Matrix{Float64}    # 24hr mean solar radiation [W/m²] (ydim, nstep_yr)
+    dTrad::Array{Float64,3}      # Tatmos-radiation offset
 
-    # Climate change anomaly fields
-    Tclim_anom_cc = zeros(Float64, xdim, ydim, nstep_yr) # surface temperature [K]
-    uclim_anom_cc = zeros(Float64, xdim, ydim, nstep_yr) # zonal wind [m/s]
-    vclim_anom_cc = zeros(Float64, xdim, ydim, nstep_yr) # meridional wind [m/s]
-    omegaclim_anom_cc = zeros(Float64, xdim, ydim, nstep_yr) # vertical velocity [Pa/s]
-    wsclim_anom_cc = zeros(Float64, xdim, ydim, nstep_yr) # wind speed [m/s]
+    # 🔧 Flux correction arrays (zeros unless loaded from file)
+    TF_correct::Array{Float64,3}
+    qF_correct::Array{Float64,3}
+    ToF_correct::Array{Float64,3}
 
-    # 🌬️ Precomputed wind sign splits ──────────────────
-    uclim_m = zeros(Float64, xdim, ydim, nstep_yr)   # negative u components
-    uclim_p = zeros(Float64, xdim, ydim, nstep_yr)   # positive u components
-    vclim_m = zeros(Float64, xdim, ydim, nstep_yr)   # negative v components
-    vclim_p = zeros(Float64, xdim, ydim, nstep_yr)   # positive v components
+    # 🌍 Regional CO₂ mask (1.0 = full CO₂, 0.5 = half CO₂)
+    co2_part::Matrix{Float64}
+end
 
-    # Initialize wind component separation (CRITICAL: affects advection)
-    @. uclim_m = ifelse(uclim >= 0.0, uclim, 0.0)  # positive winds only
-    @. uclim_p = ifelse(uclim < 0.0, uclim, 0.0)   # negative winds only
-    @. vclim_m = ifelse(vclim >= 0.0, vclim, 0.0)  # positive winds only
-    @. vclim_p = ifelse(vclim < 0.0, vclim, 0.0)   # negative winds only
-    Toclim = zeros(Float64, xdim, ydim, nstep_yr)   # deep ocean temperature [K]
-    cldclim = zeros(Float64, xdim, ydim, nstep_yr)   # cloud cover fraction
-    swetclim = zeros(Float64, xdim, ydim, nstep_yr)   # soil wetness [0-1]
-end;
-
-# ── notebook cell 0d200ce7-eadb-41de-8e31-45783a1faab9  (orig lines 870-876) ──
-begin
-    # ☀️ 2D solar field (ydim, nstep_yr) ─────────────────────────────
-    sw_solar = zeros(Float64, ydim, nstep_yr) # 24hr mean solar radiation [W/m²]
-    global dTrad = zeros(Float64, xdim, ydim, Int(nstep_yr))  # Tatmos-radiation offset
-end;
+function ClimateFields()
+    z2(args...) = zeros(Float64, args...)
+    ClimateFields(
+        z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        z2(ydim, nstep_yr), z2(xdim, ydim, Int(nstep_yr)),
+        z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
+        ones(Float64, xdim, ydim),
+    )
+end
 
 # ── notebook cell 047b312f-8d6c-4732-aa0b-bea3de3e99e2  (orig lines 984-1002, split: see constants.jl for the calendar-lookup consts from this cell) ──
 begin
@@ -302,22 +308,34 @@ begin
     end
 end;
 
-# ── notebook cell c06deaa7-2e6a-4143-a195-b473cbd84329  (orig lines 1083-1105) ──
-begin
-    # Annual-mean accumulators (xdim, ydim)
-    Tsmn = zeros(Float64, xdim, ydim)   # surface temperature
-    Tamn = zeros(Float64, xdim, ydim)   # air temperature
-    Tomn = zeros(Float64, xdim, ydim)   # deep ocean temperature
-    qmn = zeros(Float64, xdim, ydim)   # humidity
-    amn = zeros(Float64, xdim, ydim)   # albedo
+"""
+    ModelState
 
-    swmn = zeros(Float64, xdim, ydim)   # shortwave radiation
-    lwmn = zeros(Float64, xdim, ydim)   # longwave radiation
-    qlatmn = zeros(Float64, xdim, ydim)   # latent heat flux
-    qsensmn = zeros(Float64, xdim, ydim)   # sensible heat flux
-    ftmn = zeros(Float64, xdim, ydim)   # temperature flux correction
-    fqmn = zeros(Float64, xdim, ydim)   # humidity flux correction
-end;
+Per-run mutable state that isn't climatology: the runtime solar-forcing
+multiplier (`SWradiation!` reads it) and the annual-mean diagnostic
+accumulators (`diagnostics!` reads/writes them). One instance per
+`greb_model!` run.
+"""
+mutable struct ModelState
+    sw_solar_forcing::Float64   # runtime solar multiplier used by SWradiation!
+
+    # Annual-mean accumulators (xdim, ydim)
+    Tsmn::Matrix{Float64}    # surface temperature
+    Tamn::Matrix{Float64}    # air temperature
+    Tomn::Matrix{Float64}    # deep ocean temperature
+    qmn::Matrix{Float64}     # humidity
+    amn::Matrix{Float64}     # albedo
+    swmn::Matrix{Float64}    # shortwave radiation
+    lwmn::Matrix{Float64}    # longwave radiation
+    qlatmn::Matrix{Float64}  # latent heat flux
+    qsensmn::Matrix{Float64} # sensible heat flux
+    ftmn::Matrix{Float64}    # temperature flux correction
+    fqmn::Matrix{Float64}    # humidity flux correction
+end
+
+function ModelState()
+    ModelState(1.0, (zeros(Float64, xdim, ydim) for _ in 1:11)...)
+end
 
 # ── notebook cell 7a06bf0d-a61c-4d28-b144-2725fe90ae62  (orig lines 1179-1182) ──
 # Type alias for one monthly output record

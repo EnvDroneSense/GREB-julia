@@ -1,21 +1,24 @@
 # ── notebook cell d404043f-8080-4262-9ab6-d9bb13eee504  (orig lines 1200-1304) ──
-function init_model!(cfg::PhysicsConfig)
+function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
     # ── Hydrology Parameter Initialization ────────────
     set_hydrology_parameters!(cfg)
 
     # ── Reset regional CO₂ mask ───────────────────────
-    # co2_part is a module global only ever mutated by forcing()'s
-    # regional_co2_* branches; without this reset a regional experiment
-    # run earlier in the same session would leak its stale mask into any
-    # later, unrelated run.
-    co2_part .= 1.0
+    # Only matters if `fields` is being reused across multiple greb_model!
+    # calls (the default is a fresh ClimateFields() per call); a regional
+    # experiment run earlier against the same fields instance would otherwise
+    # leak its stale mask into a later, unrelated run against it.
+    fields.co2_part .= 1.0
+
+    Tclim = fields.Tclim
+    z_topo = fields.z_topo
 
     # ── dTrad: offset between T_atm and radiation temperature ────
-    @. dTrad = -0.16 * Tclim - 5.0
+    @. fields.dTrad = -0.16 * Tclim - 5.0
 
     # ── z_ocean: 3× maximum mixed-layer depth over the year ──────
-    z_ocean .= 3.0 .* dropdims(maximum(mldclim; dims=3); dims=3)
+    fields.z_ocean .= 3.0 .* dropdims(maximum(fields.mldclim; dims=3); dims=3)
 
     # ── Sensitivity experiment overrides ─────────────────────────
     if !cfg.log_topo_drsp
@@ -24,63 +27,65 @@ function init_model!(cfg::PhysicsConfig)
 
     # Apply cloud deconstruction switch
     if !cfg.log_clouds_dmc
-        cldclim .= 0.0  # zero cloud climatology
+        fields.cldclim .= 0.0  # zero cloud climatology
     end
 
     # Apply flux correction conditional zeroing (MSCM feature)
     if !cfg.log_topo_drsp && !cfg.log_qflux_dmc
-        TF_correct .= 0.0
-        qF_correct .= 0.0
-        ToF_correct .= 0.0
+        fields.TF_correct .= 0.0
+        fields.qF_correct .= 0.0
+        fields.ToF_correct .= 0.0
     end
 
     # Climatology modifications
     if !cfg.log_hydro_dmc
-        qclim .= 0.0  # zero out humidity climatology
+        fields.qclim .= 0.0  # zero out humidity climatology
     end
 
     if !cfg.log_clouds_drsp
-        cldclim .= 0.7           # constant cloud cover (2xCO2 deconstruction)
+        fields.cldclim .= 0.7           # constant cloud cover (2xCO2 deconstruction)
     end
 
     if !cfg.log_humid_drsp
-        qclim .= 0.0052          # constant water vapor
+        fields.qclim .= 0.0052          # constant water vapor
     end
 
     if !cfg.log_ocean_drsp
-        mldclim .= d_ocean       # no deep ocean
+        fields.mldclim .= d_ocean       # no deep ocean
     end
 
     # ── Experiment Handler ───────────────────────────────────
     # Apply advanced experiment forcing
     if cfg.experiment == :rcp85
         @info "Applying CMIP5 RCP8.5 climate change forcing"
-        Tclim .+= Tclim_anom_cc
-        uclim .+= uclim_anom_cc
-        vclim .+= vclim_anom_cc
-        omegaclim .+= omegaclim_anom_cc
-        wsclim .+= wsclim_anom_cc
+        Tclim .+= fields.Tclim_anom_cc
+        fields.uclim .+= fields.uclim_anom_cc
+        fields.vclim .+= fields.vclim_anom_cc
+        fields.omegaclim .+= fields.omegaclim_anom_cc
+        fields.wsclim .+= fields.wsclim_anom_cc
     elseif cfg.experiment == :elnino
         @info "Applying ERA-Interim El Niño forcing"
-        Tclim .+= Tclim_anom_enso
-        uclim .+= uclim_anom_enso
-        vclim .+= vclim_anom_enso
-        omegaclim .+= omegaclim_anom_enso
-        wsclim .+= wsclim_anom_enso
+        Tclim .+= fields.Tclim_anom_enso
+        fields.uclim .+= fields.uclim_anom_enso
+        fields.vclim .+= fields.vclim_anom_enso
+        fields.omegaclim .+= fields.omegaclim_anom_enso
+        fields.wsclim .+= fields.wsclim_anom_enso
     elseif cfg.experiment == :lanina
         @info "Applying ERA-Interim La Niña forcing"
-        Tclim .-= Tclim_anom_enso
-        uclim .-= uclim_anom_enso
-        vclim .-= vclim_anom_enso
-        omegaclim .-= omegaclim_anom_enso
-        wsclim .-= wsclim_anom_enso
+        Tclim .-= fields.Tclim_anom_enso
+        fields.uclim .-= fields.uclim_anom_enso
+        fields.vclim .-= fields.vclim_anom_enso
+        fields.omegaclim .-= fields.omegaclim_anom_enso
+        fields.wsclim .-= fields.wsclim_anom_enso
     end
 
     # ── Topography pressure weights ─────
-    @. wz_air = exp(-z_topo / z_air)
-    @. wz_vapor = exp(-z_topo / z_vapor)
+    @. fields.wz_air = exp(-z_topo / z_air)
+    @. fields.wz_vapor = exp(-z_topo / z_vapor)
 
     # ── Surface heat capacity ────────────────────────────────────
+    cap_surf = fields.cap_surf
+    mldclim = fields.mldclim
     @inbounds for j in 1:ydim
         for i in 1:xdim
             if z_topo[i, j] > 0.0
@@ -94,8 +99,8 @@ function init_model!(cfg::PhysicsConfig)
     # ── Initial conditions from last time step of climatology ────
     Ts_ini = Tclim[:, :, nstep_yr] |> copy   # surface temperature
     Ta_ini = copy(Ts_ini)                      # air temperature = Tsurf
-    To_ini = Toclim[:, :, nstep_yr] |> copy   # deep ocean temperature
-    q_ini = qclim[:, :, nstep_yr] |> copy   # atmospheric water vapor
+    To_ini = fields.Toclim[:, :, nstep_yr] |> copy   # deep ocean temperature
+    q_ini = fields.qclim[:, :, nstep_yr] |> copy   # atmospheric water vapor
 
     # ── Control CO₂ level ───────────────────────────────────────
     CO2_ctrl = cfg.co2_concentration
@@ -115,21 +120,22 @@ function init_model!(cfg::PhysicsConfig)
 end
 
 # ── notebook cell 584e767e-4dc5-4821-af63-d6a825326d9e  (orig lines 2869-2928) ──
-function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace, time_flux)
+function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace, time_flux)
+    cap_surf = fields.cap_surf
     for it in 1:(time_flux*ndt_days*ndays_yr)
         timestate.jday = mod((it - 1) ÷ ndt_days, ndays_yr) + 1
         timestate.ityr = mod(it - 1, nstep_yr) + 1
         ityr = timestate.ityr
 
-        tend = tendencies!(CO2_ctrl, Ts, Ta, To, q, ws, timestate, cfg)
+        tend = tendencies!(CO2_ctrl, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
 
         # Views into climatology & correction fields
-        Tc = @view Tclim[:, :, ityr]
-        Toc = @view Toclim[:, :, ityr]
-        qc = @view qclim[:, :, ityr]
-        TFc = @view TF_correct[:, :, ityr]
-        ToFc = @view ToF_correct[:, :, ityr]
-        qFc = @view qF_correct[:, :, ityr]
+        Tc = @view fields.Tclim[:, :, ityr]
+        Toc = @view fields.Toclim[:, :, ityr]
+        qc = @view fields.qclim[:, :, ityr]
+        TFc = @view fields.TF_correct[:, :, ityr]
+        ToFc = @view fields.ToF_correct[:, :, ityr]
+        qFc = @view fields.qF_correct[:, :, ityr]
 
         # ── Surface temperature ──────────────────────────────
         # Uncorrected state (store in workspace buffer)
@@ -159,11 +165,11 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, timestate, cfg::PhysicsConfi
         @. ws.q0_buf = ws.q0_buf + qFc
 
         # Sea ice (updates cap_surf in place)
-        seaice!(ws.Ts0_buf, timestate, cfg)
+        seaice!(ws.Ts0_buf, fields, timestate, cfg)
 
         # Diagnostics
         diagnostics!(it, 0.0, CO2_ctrl, ws.Ts0_buf, ws.Ta0_buf, ws.To0_buf, ws.q0_buf,
-            tend.albedo, tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens, timestate)
+            tend.albedo, tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens, fields, state, timestate)
 
         # Advance state (broadcast – same as `.=`)
         @. Ts = ws.Ts0_buf
@@ -184,14 +190,32 @@ const _SOLAR_SWAP_FORCING_TYPE = Dict(
     :eccentricity => :eccentricity,
 )
 
-function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_dir::AbstractString="")
-    # sw_solar is a shared module global; back it up so a paleo/orbital run's
-    # swapped table never leaks into a later, unrelated run in this session.
-    sw_solar_backup = copy(sw_solar)
+"""
+    greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir="", fields=ClimateFields())
+
+Run a GREB flux-correction spin-up (`time_flux` years), control run
+(`time_ctrl` years), and scenario run (`time_scnr` years) for `cfg`.
+
+`fields` holds the loaded climatology/grid/flux-correction state (see
+[`ClimateFields`](@ref), built by [`load_greb_jld2!`](@ref)); it defaults to
+a fresh all-zero instance so callers that never load real data (tests,
+quick structural runs) don't need to pass anything. Pass the same `fields`
+instance across multiple calls to reuse already-loaded climatology instead
+of reloading it — that's the only case where `co2_part`/`sw_solar`
+mutations from one run could otherwise leak into the next; this function
+resets/restores them per-run regardless.
+"""
+function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig;
+    jld2_dir::AbstractString="", fields::ClimateFields=ClimateFields())
+    # Back up sw_solar so a paleo/orbital run's swapped table never leaks
+    # into a later run against the same (possibly reused) `fields` instance.
+    sw_solar_backup = copy(fields.sw_solar)
     try
 
+    state = ModelState()
+
     # ── 1. Initialisation ───────────────────────────────────────
-    ini = init_model!(cfg)
+    ini = init_model!(cfg, fields)
     Ts_ini = ini.Ts_ini;
     Ta_ini = ini.Ta_ini
     To_ini = ini.To_ini;
@@ -214,10 +238,10 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     if cfg.log_topo_drsp || cfg.log_qflux_dmc
         if !cfg.log_topo_drsp && cfg.log_qflux_dmc
             println("% loading flux correction fields...")
-            load_flux_corrections_jld2!(jld2_dir)
+            load_flux_corrections_jld2!(jld2_dir, fields)
         end
         println("% flux correction  CO2 = ", CO2_ctrl)
-        qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, timestate, cfg, ws, time_flux)
+        qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, fields, state, timestate, cfg, ws, time_flux)
     else
         println("Flux correction skipped")
     end
@@ -233,7 +257,7 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     Ta = copy(Ta_ini)
     To = copy(To_ini);
     q = copy(q_ini)
-    sw_solar_forcing_state[] = 1.0
+    state.sw_solar_forcing = 1.0
     mon = 1;
     year = 1970;
     irec = 0
@@ -244,7 +268,7 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
 
     for it in 1:(time_ctrl*nstep_yr)
         (mon, irec) = time_loop!(it, year, CO2_ctrl, mon, irec,
-            Ts, Ta, q, To, ctrl_output, ws, acc, timestate, cfg)
+            Ts, Ta, q, To, ctrl_output, fields, state, ws, acc, timestate, cfg)
         if mod(it, nstep_yr) == 0
             year += 1
         end
@@ -265,7 +289,7 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     if haskey(_SOLAR_SWAP_FORCING_TYPE, cfg.experiment)
         forcing_type = _SOLAR_SWAP_FORCING_TYPE[cfg.experiment]
         println("% loading alternate solar forcing ($forcing_type)...")
-        sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
+        fields.sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
     end
 
     # Reset state to initial conditions
@@ -278,7 +302,7 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     mon = 1;
     irec = 0
 
-    sw_solar_forcing_state[] = 1.0
+    state.sw_solar_forcing = 1.0
     reset!(acc)  # Use accumulator reset
 
     scnr_output = MonthlyRecord[]
@@ -288,25 +312,25 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
 
     for it in 1:(time_scnr*nstep_yr)
         # Obtain forcing (CO2 and solar multiplier)
-        forcing_result = forcing(it, year, cfg, ice_forcing; nstep_yr=nstep_yr)
+        forcing_result = forcing(it, year, cfg, fields, ice_forcing; nstep_yr=nstep_yr)
         CO2 = forcing_result.CO2
-        sw_solar_forcing_state[] = forcing_result.sw_solar_forcing
+        state.sw_solar_forcing = forcing_result.sw_solar_forcing
 
         # Forced‑boundary experiments: overwrite Ts with climatology
         if is_forced_boundary
             ityr_now = mod(it - 1, nstep_yr) + 1
-            Ts .= @view Tclim[:, :, ityr_now]
+            Ts .= @view fields.Tclim[:, :, ityr_now]
         end
 
         # SST+1 K experiment
         if is_sst_plus1
             CO2 = CO2_ctrl
             ityr_now = mod(it - 1, nstep_yr) + 1
-            @. Ts = ifelse(z_topo < 0.0, Tclim[:, :, ityr_now] + 1.0, Ts)
+            @. Ts = ifelse(fields.z_topo < 0.0, fields.Tclim[:, :, ityr_now] + 1.0, Ts)
         end
 
         (mon, irec) = time_loop!(it, year, CO2, mon, irec,
-            Ts, Ta, q, To, scnr_output, ws, acc, timestate, cfg)
+            Ts, Ta, q, To, scnr_output, fields, state, ws, acc, timestate, cfg)
 
         if mod(it, nstep_yr) == 0
             year += 1
@@ -322,6 +346,6 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     return (ctrl=ctrl_output, scnr=scnr_output)
 
     finally
-        sw_solar .= sw_solar_backup
+        fields.sw_solar .= sw_solar_backup
     end
 end

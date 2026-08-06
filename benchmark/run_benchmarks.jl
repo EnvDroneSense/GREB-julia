@@ -24,13 +24,15 @@ tag = isempty(ARGS) ? "unlabeled run" : ARGS[1]
 using_real_data = isdir(DATA_DIR)
 if using_real_data
     println("Loading real GREB dataset from $DATA_DIR ...")
-    load_greb_jld2!(DATA_DIR; dataset=:ncep)
+    fields = load_greb_jld2!(DATA_DIR; dataset=:ncep)
 else
     println("No greb_dataset_jld2/ found — benchmarking against zero-initialized fields.")
+    fields = ClimateFields()
 end
 
 cfg = create_experiment_config(:full_model)
 ws = CirculationWorkspace()
+state = ModelState()
 timestate = TimeState(1, 1)
 
 # Physically-plausible synthetic state (not all-zero) so the kernels' ifelse
@@ -40,22 +42,22 @@ Ta_test = copy(T_test)
 To_test = fill(285.0, GREB.xdim, GREB.ydim)
 q_test  = fill(0.006, GREB.xdim, GREB.ydim)
 
-bench_data = (; T_test, Ta_test, To_test, q_test, ws, timestate, cfg)
+bench_data = (; T_test, Ta_test, To_test, q_test, fields, state, ws, timestate, cfg)
 
 println("Running kernel benchmarks (this takes a minute or two)...")
 
 results = Pair{String,BenchmarkTools.Trial}[]
 
-push!(results, "convergence!" => @benchmark convergence!($bench_data.T_test, $(GREB.omegaclim), $bench_data.timestate, $bench_data.ws) seconds=3)
-push!(results, "diffusion!" => @benchmark diffusion!($bench_data.T_test, $(GREB.z_air), $bench_data.ws, $bench_data.timestate) seconds=3)
-push!(results, "advection!" => @benchmark advection!($bench_data.T_test, $(GREB.z_air), $bench_data.ws, $bench_data.timestate, $bench_data.cfg) seconds=3)
-push!(results, "SWradiation!" => @benchmark SWradiation!($bench_data.T_test, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
-push!(results, "LWradiation!" => @benchmark LWradiation!($bench_data.T_test, $bench_data.Ta_test, $bench_data.q_test, 340.0, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
-push!(results, "hydro!" => @benchmark hydro!($bench_data.T_test, $bench_data.q_test, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
-push!(results, "seaice!" => @benchmark seaice!($bench_data.T_test, $bench_data.timestate, $bench_data.cfg) seconds=3)
-push!(results, "deep_ocean!" => @benchmark deep_ocean!($bench_data.T_test, $bench_data.To_test, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
-push!(results, "circulation!" => @benchmark circulation!($bench_data.Ta_test, $(GREB.z_air), $bench_data.ws.dTa_crcl, $bench_data.ws, $bench_data.timestate, $bench_data.cfg) seconds=3)
-push!(results, "tendencies!" => @benchmark tendencies!(340.0, $bench_data.T_test, $bench_data.Ta_test, $bench_data.To_test, $bench_data.q_test, $bench_data.ws, $bench_data.timestate, $bench_data.cfg) seconds=5)
+push!(results, "convergence!" => @benchmark convergence!($bench_data.T_test, $bench_data.fields, $bench_data.timestate, $bench_data.ws) seconds=3)
+push!(results, "diffusion!" => @benchmark diffusion!($bench_data.T_test, $(GREB.z_air), $bench_data.fields, $bench_data.ws, $bench_data.timestate) seconds=3)
+push!(results, "advection!" => @benchmark advection!($bench_data.T_test, $(GREB.z_air), $bench_data.fields, $bench_data.ws, $bench_data.timestate, $bench_data.cfg) seconds=3)
+push!(results, "SWradiation!" => @benchmark SWradiation!($bench_data.T_test, $bench_data.fields, $bench_data.state, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
+push!(results, "LWradiation!" => @benchmark LWradiation!($bench_data.T_test, $bench_data.Ta_test, $bench_data.q_test, 340.0, $bench_data.fields, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
+push!(results, "hydro!" => @benchmark hydro!($bench_data.T_test, $bench_data.q_test, $bench_data.fields, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
+push!(results, "seaice!" => @benchmark seaice!($bench_data.T_test, $bench_data.fields, $bench_data.timestate, $bench_data.cfg) seconds=3)
+push!(results, "deep_ocean!" => @benchmark deep_ocean!($bench_data.T_test, $bench_data.To_test, $bench_data.fields, $bench_data.timestate, $bench_data.cfg, $bench_data.ws) seconds=3)
+push!(results, "circulation!" => @benchmark circulation!($bench_data.Ta_test, $(GREB.z_air), $bench_data.ws.dTa_crcl, $bench_data.fields, $bench_data.ws, $bench_data.timestate, $bench_data.cfg) seconds=3)
+push!(results, "tendencies!" => @benchmark tendencies!(340.0, $bench_data.T_test, $bench_data.Ta_test, $bench_data.To_test, $bench_data.q_test, $bench_data.fields, $bench_data.state, $bench_data.ws, $bench_data.timestate, $bench_data.cfg) seconds=5)
 
 for (name, trial) in results
     println(name, ": ", BenchmarkTools.prettytime(median(trial).time),

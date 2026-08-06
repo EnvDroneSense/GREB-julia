@@ -46,3 +46,24 @@ Reproduce: `julia --project=benchmark benchmark/run_benchmarks.jl "<tag>"`
 | `circulation!` | 28.009 ms | 34.539 ms | 5.96 MiB | 146736 |
 | `tendencies!` | 55.108 ms | 64.352 ms | 11.97 MiB | 294010 |
 
+---
+
+## 2026-08-06 10:46 — post state-struct refactor (ClimateFields/ModelState) + Fortran-audit fixes 0.7-0.10
+
+- branch: `improvements`  commit: `4a2f30b` (dirty working tree)
+- data: real `greb_dataset_jld2/` (NCEP)
+- julia: `1.12.6`
+
+| kernel | min | median | memory | allocs |
+|---|---|---|---|---|
+| `convergence!` | 1.130 μs | 2.250 μs | 0 bytes | 0 |
+| `diffusion!` | 45.400 μs | 116.700 μs | 0 bytes | 0 |
+| `advection!` | 22.600 μs | 74.200 μs | 0 bytes | 0 |
+| `SWradiation!` | 16.400 μs | 18.600 μs | 38.25 KiB | 48 |
+| `LWradiation!` | 165.900 μs | 176.200 μs | 0 bytes | 0 |
+| `hydro!` | 25.000 μs | 25.600 μs | 0 bytes | 0 |
+| `seaice!` | 5.086 μs | 5.514 μs | 0 bytes | 0 |
+| `deep_ocean!` | 7.775 μs | 8.150 μs | 0 bytes | 0 |
+| `circulation!` | 1.791 ms | 1.922 ms | 0 bytes | 0 |
+| `tendencies!` | 3.689 ms | 4.247 ms | 38.25 KiB | 48 |
+

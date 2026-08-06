@@ -1,54 +1,54 @@
 # ── notebook cell cc0e682c-8767-498e-8178-2de4e796b3a8  (orig lines 2355-2392) ──
-function diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, timestate)
+function diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, fields::ClimateFields, state::ModelState, timestate)
     # Accumulate
-    Tsmn .+= Ts0;
-    Tamn .+= Ta0;
-    Tomn .+= To0
-    qmn .+= q0;
-    amn .+= albedo
-    swmn .+= sw;
-    lwmn .+= lw_surf
-    qlatmn .+= q_lat;
-    qsensmn .+= q_sens
-    ftmn .+= @view TF_correct[:, :, timestate.ityr]
-    fqmn .+= @view qF_correct[:, :, timestate.ityr]
+    state.Tsmn .+= Ts0;
+    state.Tamn .+= Ta0;
+    state.Tomn .+= To0
+    state.qmn .+= q0;
+    state.amn .+= albedo
+    state.swmn .+= sw;
+    state.lwmn .+= lw_surf
+    state.qlatmn .+= q_lat;
+    state.qsensmn .+= q_sens
+    state.ftmn .+= @view fields.TF_correct[:, :, timestate.ityr]
+    state.fqmn .+= @view fields.qF_correct[:, :, timestate.ityr]
 
     if timestate.ityr == nstep_yr
         # Compute annual means
         n = nstep_yr
-        Tsmn ./= n;
-        Tamn ./= n;
-        Tomn ./= n
-        qmn ./= n;
-        amn ./= n
-        swmn ./= n;
-        lwmn ./= n
-        qlatmn ./= n;
-        qsensmn ./= n
-        ftmn ./= n;
-        fqmn ./= n
+        state.Tsmn ./= n;
+        state.Tamn ./= n;
+        state.Tomn ./= n
+        state.qmn ./= n;
+        state.amn ./= n
+        state.swmn ./= n;
+        state.lwmn ./= n
+        state.qlatmn ./= n;
+        state.qsensmn ./= n
+        state.ftmn ./= n;
+        state.fqmn ./= n
 
         # Global mean and sample points (°C)
-        global_mean = sum(Tsmn) / (xdim * ydim) - 273.15
-        point1 = Tsmn[48, 27] - 273.15   # Tropical Pacific
-        point2 = Tsmn[16, 38] - 273.15   # Hamburg/North Europe
+        global_mean = sum(state.Tsmn) / (xdim * ydim) - 273.15
+        point1 = state.Tsmn[48, 27] - 273.15   # Tropical Pacific
+        point2 = state.Tsmn[16, 38] - 273.15   # Hamburg/North Europe
 
         println(year, "  ", round(global_mean, digits=2),
             "  ", round(point1, digits=2),
             "  ", round(point2, digits=2))
 
         # Reset accumulators
-        fill!(Tsmn, 0.0);
-        fill!(Tamn, 0.0);
-        fill!(Tomn, 0.0)
-        fill!(qmn, 0.0);
-        fill!(amn, 0.0)
-        fill!(swmn, 0.0);
-        fill!(lwmn, 0.0)
-        fill!(qlatmn, 0.0);
-        fill!(qsensmn, 0.0)
-        fill!(ftmn, 0.0);
-        fill!(fqmn, 0.0)
+        fill!(state.Tsmn, 0.0);
+        fill!(state.Tamn, 0.0);
+        fill!(state.Tomn, 0.0)
+        fill!(state.qmn, 0.0);
+        fill!(state.amn, 0.0)
+        fill!(state.swmn, 0.0);
+        fill!(state.lwmn, 0.0)
+        fill!(state.qlatmn, 0.0);
+        fill!(state.qsensmn, 0.0)
+        fill!(state.ftmn, 0.0);
+        fill!(state.fqmn, 0.0)
     end
     return nothing
 end
@@ -88,7 +88,7 @@ end
 
 # ── notebook cell 33fa7b1f-938b-481c-bf25-eca8d7fb33a7  (orig lines 2438-2500) ──
 function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
-    ws::CirculationWorkspace, acc::MonthlyAccumulator,
+    fields::ClimateFields, state::ModelState, ws::CirculationWorkspace, acc::MonthlyAccumulator,
     timestate, cfg::PhysicsConfig)
     # Calendar lookup
     cal = it <= max_timesteps ? calendar_lookup[it] : (
@@ -100,12 +100,14 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     ityr = timestate.ityr
 
     # Compute tendencies
-    tend = tendencies!(CO2, Ts, Ta, To, q, ws, timestate, cfg)
+    tend = tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
 
     # Correction views
-    TF_corr = @view TF_correct[:, :, ityr]
-    qF_corr = @view qF_correct[:, :, ityr]
-    ToF_corr = @view ToF_correct[:, :, ityr]
+    TF_corr = @view fields.TF_correct[:, :, ityr]
+    qF_corr = @view fields.qF_correct[:, :, ityr]
+    ToF_corr = @view fields.ToF_correct[:, :, ityr]
+    cap_surf = fields.cap_surf
+    wz_vapor = fields.wz_vapor
 
     # Surface temperature
     @. Ts = Ts + tend.dT_ocean + Δt * (tend.SW + tend.LW_surf - tend.LW_down +
@@ -130,7 +132,7 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
         -min_humidity_change * q, max_humidity_change)
 
     # Sea ice heat capacity
-    seaice!(Ts, timestate, cfg)
+    seaice!(Ts, fields, timestate, cfg)
 
     # Conversion to mm/day (analysis units)
     @. ws.precip_out = (-dq_rain_use) * wz_vapor * conv_factor
@@ -144,7 +146,7 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
         tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens,
         output_buf, acc, timestate)
     diagnostics!(it, year, CO2, Ts, Ta, To, q, tend.albedo,
-        tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens, timestate)
+        tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens, fields, state, timestate)
 
     return (mon=mon, irec=irec)
 end

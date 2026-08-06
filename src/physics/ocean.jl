@@ -1,6 +1,9 @@
 # ── notebook cell 9bff59c5-4631-4091-8230-989a835788e5  (orig lines 1650-1688) ──
-function seaice!(Ts0, timestate, cfg::PhysicsConfig)
-    mld = @view mldclim[:, :, timestate.ityr]
+function seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
+    mld = @view fields.mldclim[:, :, timestate.ityr]
+    z_topo = fields.z_topo
+    glacier = fields.glacier
+    cap_surf = fields.cap_surf
 
     if !cfg.log_ocean_dmc
         return     # No ice feedback: skip sea ice calculation
@@ -38,7 +41,7 @@ function seaice!(Ts0, timestate, cfg::PhysicsConfig)
 end
 
 # ── notebook cell 625089e2-ef77-4821-a6d6-d0a0f88207f2  (orig lines 1703-1750) ──
-function deep_ocean!(Ts, To, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
+function deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Use pre-allocated zero buffers
     dT_ocean = ws.dT_ocean_buf
     dTo = ws.dTo_buf
@@ -50,9 +53,12 @@ function deep_ocean!(Ts, To, timestate, cfg::PhysicsConfig, ws::CirculationWorks
         return (dT_ocean=dT_ocean, dTo=dTo)
     end
 
+    z_topo = fields.z_topo
+    z_ocean = fields.z_ocean
+
     # ── Change in mixed-layer depth ─────────────────────────
-    mld_now = @view mldclim[:, :, timestate.ityr]
-    mld_prev = timestate.ityr > 1 ? @view(mldclim[:, :, timestate.ityr-1]) : @view(mldclim[:, :, nstep_yr])
+    mld_now = @view fields.mldclim[:, :, timestate.ityr]
+    mld_prev = timestate.ityr > 1 ? @view(fields.mldclim[:, :, timestate.ityr-1]) : @view(fields.mldclim[:, :, nstep_yr])
 
     # Zero buffers first (one pass, cheap)
     fill!(dT_ocean, 0.0)

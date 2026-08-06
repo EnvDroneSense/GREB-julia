@@ -2,16 +2,18 @@
 
 Observations and concrete suggestions for the `GREB` module. The model has
 been split from a single 2245-line `src/GREB.jl` into topical files under
-`src/` — see §1.2. Two bug-hunting passes have gone through this list so far
-(2026-08-05/06 and 2026-08-06 §4); nothing else here has been applied except
-where marked **✅ done** — this remains a menu for future work, primarily the
-state-struct refactor in §1.1.
+`src/` — see §1.2. Three bug-hunting passes have gone through this list so far
+(2026-08-05/06, 2026-08-06 §4, and 2026-08-06 third pass in §0); nothing else
+here has been applied except where marked **✅ done**.
 
-The single theme underneath most of what remains: **the model runs on ~40
-mutable module-level globals** (grid arrays, climatology fields, work buffers,
-flux corrections). That one design choice drives most of the remaining
-structural *and* performance issues below — it's why the module eats ~750 MB
-at load and why the code is hard to thread or test.
+The single theme underneath most of what used to remain: **the model ran on
+~40 mutable module-level globals** (grid arrays, climatology fields, work
+buffers, flux corrections). That one design choice drove most of the
+structural *and* performance issues below — it's why the module used to eat
+~750 MB at load, why the code was hard to thread or test, and why the same
+"config flag silently disconnected from behavior" bug shape kept recurring
+across all three bug-hunting passes. **§1.1 (the state-struct refactor) is now
+done** — see that section for what changed and how it was validated.
 
 ---
 
@@ -138,46 +140,127 @@ Second-pass audit performed the same way as the first: grepped every
 Two more dead globals and one more unused dependency turned up as a side
 effect — see §1.6 and §3.
 
+### Third pass (2026-08-06): direct audit against the Fortran reference
+
+The user asked for a line-by-line comparison against the original Fortran
+model (`greb.model.mscm.f90`) to confirm the Julia port hadn't drifted
+conceptually — either from the notebook→package extraction or from the first
+two passes' own fixes. That audit confirmed §0.4's `do_conv`/`log_conv` fix
+was correct (Fortran's own switch-family convention and the original
+notebook's preset groupings both independently confirm `log_conv::Bool=true`
+means "on") and turned up four more real bugs, all fixed with regression
+tests and checked against the actual Fortran subroutine text (not recalled
+from memory):
+
+#### 0.7 `hydro!`'s `log_eva` modes 1 and 2 didn't exist
+`src/physics/hydrology.jl`'s evaporation section had branches for
+`log_eva ∈ {-1, 0}` (both correct) but silently reused mode `-1`'s formula
+for `1`/`2`/anything else, instead of Fortran's two genuinely distinct
+parameterizations (different wind-gust terms and land/ocean coefficients).
+**Fixed**: implemented the real mode-1 (`0.04`/`0.73` land/ocean coefficients,
+`144.0`/`50.41` gust terms, wind from `uclim`/`vclim`) and mode-2 (`0.56`/
+`0.79` coefficients, `81.0`/`16.0` gust terms, wind from `wsclim`) formulas,
+plus an `error()` fallback for any other value. Regression test extended the
+existing `log_eva`×`log_rain` branch-coverage sweep to include mode `2`, and
+added a direct assertion that all four `log_eva` values produce different
+`hydro!` output for the same synthetic input (the branch-coverage sweep alone
+only checks output *shape*, which is exactly why this went undetected).
+
+#### 0.8 `init_model!`'s `_drsp` climatology overrides were mismapped
+Fortran's decon-2xCO2 sensitivity overrides (`if(log_cloud_drsp==0)
+cldclim=0.7`, `log_humid_drsp` → `qclim=0.0052`, `log_ocean_drsp` →
+`mldclim=d_ocean`) were, in `src/model.jl`'s `init_model!`: the `cldclim=0.7`
+override missing entirely, the `qclim` override gated on `log_vapor_dmc`
+instead of `log_humid_drsp`, and the `mldclim` override gated on
+`log_ocean_dmc` instead of `log_ocean_drsp`. A user running the documented
+"deconstruct 2×CO2" experiment and toggling the real `_drsp` switches got
+silently wrong or no-op behavior. **Fixed**: added the missing override,
+corrected the other two switch names. Regression test constructs a config
+with all three `_drsp` switches off and asserts each climatology array
+matches its documented constant.
+
+#### 0.9 `LWradiation!`'s `log_atmos_dmc` asymmetry
+Fortran only zeros `LWair_down` when `log_atmos_dmc==0`; `LWair_up` is
+snapshotted *before* that zeroing and keeps its full computed value (the
+switch decouples the surface from atmospheric downwelling feedback without
+touching the atmosphere's own emission term). Julia's `LWradiation!` zeroed
+both. **Fixed**: removed the extra `LW_up .= 0.0`. Only affects experiments
+that explicitly disable `atmos_dmc`; no change to `:full_model`. Regression
+test confirms `LW_down==0` but `LW_up` unchanged when the switch is off.
+
+#### 0.10 Paleo/orbital solar forcing was never wired up
+Fortran swaps in an entirely different `(ydim, nstep_yr)` solar table for
+paleo/orbital experiments (`sw_solar = sw_solar_scnr`, log_exp 30/31/35/36).
+Julia had the loader (`load_solar_forcing_jld2`) but nothing ever called it
+from `greb_model!` — `:paleo_231kyr`/`:paleo_solar_modern_co2`/`:obliquity`/
+`:eccentricity` silently ran on the ordinary modern seasonal solar cycle.
+**Fixed**: `greb_model!` now swaps in the right table at the start of the
+scenario run for those four experiments (via a new `orbital_index`
+`PhysicsConfig` field for selecting an eccentricity/obliquity table row), and
+`:earth_sun_distance` now applies Fortran's scalar rescale (`rS0 =
+(1/(1+0.01·dradius))²`) via a new `earth_sun_distance_pct` field, the same
+mechanism already used for `:solar_plus27`. Regression test writes a
+synthetic solar-table JLD2 fixture and confirms the swap branch runs and
+`sw_solar` is restored afterward (see §1.1 — this hazard is structurally
+gone for the default fresh-`fields`-per-call path now anyway).
+
+Audited the same way as the first two passes (grep every switch write vs.
+read site) plus a fresh, independent read of the Fortran subroutine bodies
+for every function these four bugs touch. No further deviations found in
+`hydro!`, `LWradiation!`, `SWradiation!`, `seaice!`, `deep_ocean!`,
+`circulation!`, or `init_model!`.
+
 ---
 
 ## 1. Structure
 
-### 1.1 Replace module-global mutable state with state structs  ⭐ highest impact — deferred
-Today the model's entire state lives as module globals: climatology fields
-(`Tclim`, `uclim`, `qclim`, …), work buffers, masks (`co2_part`), and flux
-corrections (`TF_correct`, …). Functions read/write them by name
-(`load_greb_jld2!` fills them; `tendencies!`/`forcing` read them).
-
-Problems this causes:
-- **No reentrancy / concurrency** — you cannot run two experiments at once, or
-  thread over ensembles; they'd clobber shared globals.
-- **Hidden coupling** — the kind of thing that produced §0.1–0.3.
-- **Type instability** (see §2.1) and **eager 750 MB allocation** (see §2.2).
-- **Hard to test** — you can't construct a small, isolated state (this is also
-  why §0.1's bug slipped through: there's no lightweight way to unit-test
-  `hydro!` in isolation across all `log_eva` branches — though the new
-  per-kernel `@benchmark` suite in `benchmark/run_benchmarks.jl` is a step in
-  that direction for performance, if not yet for correctness).
-
-Suggested shape:
+### 1.1 Replace module-global mutable state with state structs  ✅ done
+The model's ~40 mutable module globals (climatology fields, derived grid
+fields, flux corrections, the `co2_part` mask, `sw_solar`) are gone. Two
+structs now hold everything, `src/state.jl`:
 ```julia
-struct ClimateFields          # the loaded climatology (immutable container, mutable arrays)
-    Tclim::Array{Float64,3}; uclim::Array{Float64,3}; ...
+mutable struct ClimateFields   # loaded climatology, grid fields, flux corrections, masks — 37 fields
+    z_topo::Matrix{Float64}; ...; Tclim::Array{Float64,3}; uclim::Array{Float64,3}; ...
 end
-mutable struct ModelState     # evolving state + reusable work buffers
-    Ts::Matrix{Float64}; Ta::Matrix{Float64}; To::Matrix{Float64}; q::Matrix{Float64}
-    ws::CirculationWorkspace; acc::MonthlyAccumulator; ...
+mutable struct ModelState      # runtime solar-forcing scalar + annual-mean diagnostic accumulators
+    sw_solar_forcing::Float64; Tsmn::Matrix{Float64}; ...
 end
-greb_model(fields::ClimateFields, cfg::PhysicsConfig, run::RunSpec) -> Result
 ```
-`CirculationWorkspace` and `MonthlyAccumulator` already do this well for their
-slices — extend the same pattern to the rest (climatology fields, flux
-corrections, annual/monthly accumulators, now consolidated in `src/state.jl`).
-This is a large but mechanical refactor and unlocks almost everything else.
-**Deferred to a follow-up pass**: it touches nearly every function signature,
-and should be validated against real control-run output (now that
-`greb_dataset_jld2/` is available locally — see the repo's `.gitignore`) rather
-than only structurally.
+Every physics/circulation/tendencies/output/model function gained an explicit
+`fields::ClimateFields` parameter (and `state::ModelState` where it touches
+the solar-forcing scalar or the annual-mean accumulators) instead of closing
+over module globals. `load_greb_jld2!`/`load_flux_corrections_jld2!` now
+*return*/*fill* a `ClimateFields` rather than mutating globals in place.
+`greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir="", fields=ClimateFields())`
+defaults to a fresh instance per call — the old cross-run leak hazard
+(§0.5's `co2_part` bug, and a similar risk for a paleo run's swapped
+`sw_solar` table) is now structurally impossible for that default path;
+`init_model!`/`greb_model!` still defensively reset `co2_part`/`sw_solar` for
+callers who explicitly reuse one `fields` instance across multiple runs (e.g.
+to avoid reloading real climatology).
+
+Migrated one file at a time, bottom-up (`physics/*.jl` → `circulation.jl` →
+`tendencies.jl` → `output.jl` → `model.jl` → `io.jl`), running the full test
+suite after each. `CirculationWorkspace`/`MonthlyAccumulator` already followed
+this pattern for their own slices — the same shape was just extended to
+everything else.
+
+**Validated against real data** (`greb_dataset_jld2/`), not just structurally:
+a 1-year control+scenario `:full_model` run's `MonthlyRecord` output before
+and after the refactor agrees to within **~7e-12 absolute** on fields with
+O(1–300) magnitude (Ts, precip, SW, …) — floating-point reassociation noise
+from a different compiled instruction order (typed struct fields vs. globals
+changes what LLVM/`@turbo` can vectorize), not a behavior change. Exactly
+bit-identical turned out to be the wrong bar for a change that also alters
+codegen; agreement to 13+ significant figures over 1460 accumulated timesteps
+is the right one.
+
+**Unplanned bonus**: this was pursued for correctness/testability, not speed,
+but the same real-data run went from 49s/17.1 GiB allocated to **7.0s/100 MiB
+allocated** — a ~7x runtime, ~170x allocation reduction. Global mutable
+bindings in Julia are type-unstable at every access; struct fields with
+concrete types are not. This also incidentally fixes §2.2 (see below) and
+unlocks §2.4 (threading) — see those sections.
 
 ### 1.2 Split the module into files  ✅ done
 `src/GREB.jl` was a single 2245-line file; it's now a module shell with
@@ -201,21 +284,24 @@ Pure move — no function body, constant value, or struct definition changed.
 Verified by `using GREB` loading cleanly and the full test suite passing
 identically before/after.
 
-### 1.3 Collapse giant positional argument lists into structs — deferred
-Several kernels still thread ~10–20 positional arrays:
-- `output!(it, irec, mon, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens, …)` (`src/output.jl`)
-- `diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, timestate)` (`src/output.jl`)
-- `time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf, ws, acc, timestate, cfg)` (`src/output.jl`)
+### 1.3 Collapse giant positional argument lists into structs — still deferred
+Several kernels still thread ~10–20 positional arrays — `output!`,
+`diagnostics!`, `time_loop!` (`src/output.jl`) all still take Ts0/Ta0/To0/q0/
+albedo/ice/precip/... as bare positional args, now *alongside* the new
+`fields`/`state` parameters from §1.1 rather than instead of them. §1.1
+deliberately only moved what was actually **global** (climatology, grid
+fields, flux corrections, the annual-mean accumulators) — `Ts`/`Ta`/`To`/`q`
+and the per-month working arrays were already ordinary function-local
+variables, not part of the global-state bug class, so leaving them positional
+was in scope but not required by §1.1. Collapsing them into a
+`SurfaceState`-style struct is still a real readability win and still
+deferred — same error-prone-positional-mixup rationale as before.
 
-These are error-prone (positional mixups — the exact failure mode that would
-have hidden §0.1 even longer if it were a swapped argument instead of a
-missing field) and hard to read. Passing a `ModelState`/`Diagnostics` struct
-(from §1.1) removes most of them. Deferred alongside §1.1.
-
-### 1.4 Turn run durations into a `RunSpec`, not positional ints — deferred
-`greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir="")` (`src/model.jl`)
-takes three bare ints whose order is easy to swap. A `RunSpec(; flux=0, ctrl=1,
-scnr=1)` keyword struct is self-documenting and pairs with §1.1.
+### 1.4 Turn run durations into a `RunSpec`, not positional ints — still deferred
+`greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir="", fields=ClimateFields())`
+(`src/model.jl`) still takes three bare ints whose order is easy to swap — §1.1
+added a `fields` keyword alongside them but didn't touch this. A
+`RunSpec(; flux=0, ctrl=1, scnr=1)` keyword struct remains a good follow-up.
 
 ### 1.5 ~~Reunite the two notebook-only helpers with the package~~ ✅ done
 `examples/run_greb.jl` already provides a non-Pluto path — it builds a
@@ -241,9 +327,8 @@ Removed, all confirmed dead by grep (no reads/writes anywhere else):
   "annual-mean accumulators" block in `src/state.jl` (`Tsmn, Tamn, ...` are
   real and kept).
 
-`sw_solar_forcing_state = Ref(1.0)` remains — it's a real, actively-mutated
-global (set in `greb_model!`, read in `SWradiation!`). Belongs in run state
-once §1.1 lands.
+`sw_solar_forcing_state = Ref(1.0)` — now `ModelState.sw_solar_forcing`, moved
+as part of §1.1.
 
 **Second-pass addendum**: two more, found the same way — `co2_part_scn` and
 `sw_solar_forcing_data` (`src/state.jl`), both declared and never read or
@@ -258,11 +343,12 @@ Grid dimensions (`xdim`, `ydim`, `nstep_yr`, …) and the physical constants
 (`σ`, `ρ_ocean`, `grav`, `cp_air`, …), now in `src/constants.jl`, are all
 `const`. No further action needed.
 
-### 2.2 Stop allocating ~750 MB at module load — deferred
-There are still **28 top-level `zeros(Float64, xdim, ydim, nstep_yr)`
-allocations** in `src/state.jl` — ~27 MB each ⇒ **~750 MB reserved even for
-`using GREB` with no run**. Move these into the state structs from §1.1 so
-they're allocated only when a model is actually set up.
+### 2.2 Stop allocating ~750 MB at module load ✅ done
+Fixed as a direct consequence of §1.1: the ~28 large arrays that used to be
+top-level `zeros(Float64, xdim, ydim, nstep_yr)` calls in `src/state.jl` (run
+once at module load, ~27 MB each ⇒ ~750 MB just from `using GREB`) are now
+fields inside `ClimateFields`, allocated only when `ClimateFields()`/
+`load_greb_jld2!`/`greb_model!` is actually called.
 
 ### 2.3 Consider `Float32` for climatology fields — deferred
 The JLD2 files store `Float32` data and are up-converted to `Float64` on load
@@ -272,12 +358,14 @@ under `@turbo`. Now that `greb_dataset_jld2/` is available locally, this can
 be benchmarked against real data (see `benchmark/run_benchmarks.jl`) rather
 than estimated.
 
-### 2.4 Thread the spatial operators — deferred
+### 2.4 Thread the spatial operators — now unlocked, still deferred
 Time-stepping is inherently sequential, but per-step spatial kernels
 (`diffusion!`, `advection!`, `SWradiation!`, `LWradiation!`, `hydro!`) are
-independent across grid columns. Once state is passed explicitly (§1.1, no
-shared globals) these become safe to `@threads` / `@batch` (Polyester) over
-latitude — no threading is used anywhere in the module today.
+independent across grid columns. §1.1 landed the prerequisite (state passed
+explicitly, no shared globals to clobber across threads) — these are now
+genuinely safe to `@threads` / `@batch` (Polyester) over latitude. No
+threading is used anywhere in the module yet; this is the natural next
+performance step, and unlike before it's no longer blocked on anything else.
 
 ### 2.5 ~~Cut per-call allocations in `forcing`~~ ✅ done
 `forcing`'s `icmn_ctrl` is a required argument (`src/tendencies.jl`); the
@@ -368,18 +456,19 @@ broadly than a mechanical change should, or naturally belong with the
 already-deferred state-struct refactor (§1.1) — so they're recorded here
 rather than fixed inline.
 
-### 4.1 Nine config switches are wired to nothing
+### 4.1 Seven config switches are wired to nothing
 `PhysicsConfig` fields that are set (including by `create_experiment_config`)
 but never read by any physics function, so toggling them has zero effect on
 model output: `solar_multiplier` (the actual `+27 W/m²` solar-forcing effect
 is computed independently inside `forcing()`, `src/tendencies.jl`, not via
-this field), `log_clouds_drsp`/`log_vapor_drsp`/`log_ice_drsp`/`log_humid_drsp`
-("CO₂ Response Switches"), `log_tsurf_ext`/`log_hwind_ext`/`log_omega_ext`
-("External Forcing" switches), and `log_ice_dmc` (distinct from `log_ice`,
-which *is* wired in `radiation.jl`/`ocean.jl`). All are documented,
-notebook-exposed controls — this is the same "config field disconnected from
-behavior" bug class as §0.2–0.6, but wiring 9 features up (or removing them)
-is a scope/design decision, not a mechanical fix.
+this field), `log_vapor_drsp`/`log_ice_drsp` ("CO₂ Response Switches" —
+`log_clouds_drsp`/`log_humid_drsp` are now wired, fixed as §0.8),
+`log_tsurf_ext`/`log_hwind_ext`/`log_omega_ext` ("External Forcing"
+switches), and `log_ice_dmc` (distinct from `log_ice`, which *is* wired in
+`radiation.jl`/`ocean.jl`). All are documented, notebook-exposed controls —
+this is the same "config field disconnected from behavior" bug class as
+§0.2–0.6/§0.8, but wiring 7 features up (or removing them) is a scope/design
+decision, not a mechanical fix.
 
 ### 4.2 `log_clim` doesn't select the ERA/NCEP dataset its label implies
 The notebook documents a Hydrology control "Climatology (ERA/NCEP)" bound to
@@ -391,13 +480,9 @@ keyword to `load_greb_jld2!` (`src/io.jl`), set before `greb_model!` runs and
 never connected to `cfg` at all. Fixing this properly means deciding whether
 `cfg` should drive data loading (a real API question) — deferred alongside §1.1.
 
-### 4.3 `hydro!`'s 4 documented evaporation modes are really 2
-`log_eva` branches for `1`/`2`/anything-else are byte-identical to the
-`-1` branch (`src/physics/hydrology.jl`) — only 2 of the 4 documented
-evaporation formulas actually exist. Confirmed the same gap exists in the
-original notebook, so this is a pre-existing physics-completeness question,
-not a coding bug — needs someone who knows the intended formulas for modes
-`1`/`2`, not a mechanical fix.
+### 4.3 ~~`hydro!`'s 4 documented evaporation modes are really 2~~ ✅ done
+Fixed as §0.7 — modes `1`/`2` now implement Fortran's actual distinct
+formulas instead of duplicating mode `-1`.
 
 ### 4.4 `forcing()` per-timestep overhead
 `forcing()` (`src/tendencies.jl`) has no `:full_model` branch (the default,
@@ -445,12 +530,11 @@ signature changes then anyway — not a standalone mechanical fix, and (per
 preserved carefully by whatever replaces it.
 
 ### 4.9 Testing gaps
-- **Zero scenario-run coverage**: every `greb_model!` call in
-  `test/runtests.jl` (aside from the new §0.5 regression test) uses
-  `time_scnr = 0`, so the scenario loop's body — all of `forcing()`,
-  `build_monthly_climatology`, `apply_scenario_anomalies`, and the
-  `is_forced_boundary`/`is_sst_plus1`/`is_orbital_exp` branches in
-  `greb_model!` — is otherwise untested.
+- **Scenario-run coverage**: was zero except §0.5's regression test; §0.10's
+  new regression test also now runs a `time_scnr=1` scenario for
+  `:paleo_231kyr`. Still mostly uncovered: `build_monthly_climatology`,
+  `apply_scenario_anomalies`, and the `is_forced_boundary`/`is_sst_plus1`
+  branches in `greb_model!` (only `is_orbital_exp`'s path is exercised so far).
 - **`qflux_correction!`'s loop body has zero coverage**: every test uses
   `time_flux = 0`, so `for it in 1:(time_flux*ndt_days*ndays_yr)` is always an
   empty range. README's own "Known Issues" section flags this exact module as
@@ -458,18 +542,18 @@ preserved carefully by whatever replaces it.
 - **Most `experiment` symbols are unreachable in tests**: `create_experiment_config`
   only covers 9 of ~25+ symbols `forcing()`/`init_model!`/`greb_model!`
   special-case (e.g. `:a1b_scenario`, `:co2_10x`, `:solar_cycle_11yr`,
-  `:obliquity`, `:rcp26/45/60`) — only reachable via `PhysicsConfig(experiment=...)`
-  directly, and none are exercised in the pre-existing test suite (this is
-  exactly how §0.5's `co2_part` leak went undetected; the new regression test
-  for it is the first test to reach a `regional_co2_*` branch at all).
+  `:rcp26/45/60`) — only reachable via `PhysicsConfig(experiment=...)`
+  directly. `:regional_co2_nh`, `:paleo_231kyr` are now exercised (§0.5, §0.10
+  regression tests); the rest still aren't.
 - **Branch-coverage tests assert shape, not distinctness**: the `log_eva`/
-  `log_rain` sweep only checks `length(result.ctrl) == 12` — it wouldn't have
-  caught §4.3 (branches producing identical output) because it never compares
-  outputs across branch values.
-- **No synthetic JLD2 fixture**: `read_jld2`'s happy path and
-  `load_greb_jld2!`/`load_flux_corrections_jld2!`'s "file exists" branches are
-  untested; a minimal file written via `JLD2` to a `tempname()` path would
-  exercise these without needing the real, gitignored dataset.
+  `log_rain` sweep still only checks `length(result.ctrl) == 12` for its
+  main pass, but a separate direct test now added alongside §0.7's fix
+  confirms `hydro!`'s four `log_eva` values produce genuinely different
+  output, not just the same shape.
+- **Synthetic JLD2 fixtures**: §0.10's regression test now writes one (a
+  `solar_paleo.jld2` in a tempdir) to exercise `load_solar_forcing_jld2`
+  without the real, gitignored dataset. `load_greb_jld2!`/
+  `load_flux_corrections_jld2!`'s "file exists" branches remain untested this way.
 
 ### 4.10 CI has no lint/format or doc-build check
 `.github/workflows/ci.yml` only runs `julia-runtest`. No `JuliaFormatter`
@@ -481,21 +565,24 @@ picking a formatting style first — a decision, not a mechanical addition.
 
 ## 5. Suggested order (low-risk → high-value)
 
-1. ~~Fix `§0` bugs~~ ✅ done — all six, across two passes, with regression tests.
+1. ~~Fix `§0` bugs~~ ✅ done — all ten, across three passes, with regression tests.
 2. ~~Split into files (§1.2)~~ ✅ done — mechanical, improves everything after.
 3. ~~Add `[compat]`, CI, dead-dependency cleanup, `log_eva`/`log_rain` branch
    coverage, benchmark suite (§3)~~ ✅ done.
-4. **Introduce state structs** (§1.1, §1.3, §1.4) — the big one; enables
-   §2.2, §2.4, and removes the global-coupling class of bugs for good. Next
-   up — validate against real control-run output (`greb_dataset_jld2/` is now
-   available locally) rather than structurally only.
-5. Lazy allocation (§2.2), threading (§2.4), `Float32`/allocation audit
-   (§2.3, §2.5's newly-measured `diffusion!`/`advection!`/`circulation!`
-   allocations).
+4. ~~Introduce state structs (§1.1)~~ ✅ done — validated against real
+   control-run output (`greb_dataset_jld2/`): agrees with the pre-refactor
+   baseline to ~7e-12 absolute (floating-point reassociation, not a behavior
+   change), and incidentally fixed §2.2 (lazy allocation) and unlocked §2.4
+   (threading) as a side effect. §1.3/§1.4 (argument-list/`RunSpec` collapsing)
+   remain deferred — real but smaller wins than §1.1 was.
+5. **Next up**: threading the spatial operators (§2.4, now unblocked),
+   `Float32`/allocation audit (§2.3, §2.5's `diffusion!`/`advection!`/
+   `circulation!` allocations — worth re-measuring now that §1.1 changed
+   codegen), §1.3/§1.4's remaining argument-collapsing.
 6. The §4 findings that need domain/design input before they can even be
-   scoped as mechanical work (§4.1 unwired switches, §4.2 `log_clim`/dataset
-   split, §4.3 `hydro!`'s missing evaporation formulas, §4.8 `forcing()`
-   dispatch) — bring in whoever knows the intended physics/API shape.
+   scoped as mechanical work (§4.1's remaining unwired switches, §4.2
+   `log_clim`/dataset split, §4.8 `forcing()` dispatch) — bring in whoever
+   knows the intended physics/API shape.
 
 > ⚠️ Every performance change must be validated against a reference run —
 > this is a numerical model, so "faster" only counts if the output is
@@ -506,6 +593,26 @@ picking a formatting style first — a decision, not a mechanical addition.
 
 ## Changelog of this document
 
+- **2026-08-06 (third pass + state-struct refactor)**: The user asked for a
+  direct line-by-line comparison against the original Fortran reference
+  (`greb.model.mscm.f90`) to confirm no conceptual drift, then to plan and
+  execute both the fixes it found and the previously-deferred §1.1 refactor.
+  Found and fixed four more real bugs against the Fortran text (§0.7–0.10):
+  `hydro!`'s missing `log_eva` modes 1/2, `init_model!`'s mismapped `_drsp`
+  climatology overrides, `LWradiation!`'s `log_atmos_dmc` asymmetry, and
+  paleo/orbital solar forcing never being wired up — all with regression
+  tests, all committed separately before starting the refactor so it had a
+  known-good baseline to validate against. Then replaced the ~40 mutable
+  module globals with `ClimateFields`/`ModelState` (§1.1), threaded explicitly
+  through every physics/circulation/tendencies/output/model function,
+  migrated one file at a time with the full test suite run after each.
+  Validated against a real `greb_dataset_jld2/` control+scenario run: matches
+  the pre-refactor baseline to ~7e-12 absolute (floating-point reassociation,
+  not a behavior change) and — unplanned — cut runtime ~7x (49s→7.0s) and
+  allocations ~170x (17.1 GiB→100 MiB) on that same run, plus fixed §2.2
+  (lazy allocation) and unlocked §2.4 (threading) as direct side effects.
+  Updated §4.1/§4.3/§4.9 to reflect what §0.8/§0.7 fixed, and §1.3/§1.4/§2.4
+  to reflect what §1.1 changed but didn't fully subsume.
 - **2026-08-06 (second pass)**: A fresh, independent read through the (now
   split) `src/` tree found three more real bugs of the same "disconnected
   config flag" shape as §0.2/§0.3 — fixed with regression tests: `circulation!`'s
