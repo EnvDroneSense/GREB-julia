@@ -1,4 +1,3 @@
-# ── notebook cell 9bff59c5-4631-4091-8230-989a835788e5  (orig lines 1650-1688) ──
 """
     seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
 
@@ -43,14 +42,10 @@ function seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
         end
     end
 
-    # Glacier override: ice sheets have land heat capacity. Applied
-    # unconditionally after the log_ice block, matching Fortran (no early
-    # return there — greb.model.mscm.f90:786-792) — previously this was
-    # skipped entirely whenever cfg.log_ice was false.
+    # Glacier override: ice sheets have land heat capacity.
     @. cap_surf = ifelse(glacier > 0.5, cap_land, cap_surf)
 end
 
-# ── notebook cell 625089e2-ef77-4821-a6d6-d0a0f88207f2  (orig lines 1703-1750) ──
 """
     deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -78,19 +73,14 @@ function deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfi
     mld_now = @view fields.mldclim[:, :, timestate.ityr]
     mld_prev = timestate.ityr > 1 ? @view(fields.mldclim[:, :, timestate.ityr-1]) : @view(fields.mldclim[:, :, nstep_yr])
 
-    # Zero buffers first (one pass, cheap)
+    # Zero buffers first
     fill!(dT_ocean, 0.0)
     fill!(dTo, 0.0)
 
     # ── Entrainment & detrainment & turbulent mixing ──────
     @turbo for i in 1:xdim, j in 1:ydim
         is_ocean = z_topo[i, j] < 0.0
-        # Entrainment/detrainment require Ts >= To_ice2 (Fortran gates these
-        # two terms on the ice threshold); turbulent mixing below does NOT —
-        # it uses Tx = max(To_ice2, Ts) specifically so it stays well-defined
-        # under ice, and is masked on is_ocean alone (greb.model.mscm.f90:
-        # 818-821 vs 828-830). Gating turbulent mixing on Ts >= To_ice2 too
-        # would cut off ocean-atmosphere heat exchange under sea ice/winter.
+        # Entrainment/detrainment require Ts >= To_ice2
         active = is_ocean & (Ts[i, j] >= To_ice2)
         h_now = mld_now[i, j]
         h_prev = mld_prev[i, j]

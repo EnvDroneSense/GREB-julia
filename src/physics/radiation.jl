@@ -1,4 +1,3 @@
-# ── notebook cell 1df2b91b-be14-427a-87b3-95cdef26ce00  (orig lines 1359-1419) ──
 """
     SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -9,15 +8,15 @@ flux from `Ts` and the current cloud climatology. Returns
 function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Reuse workspace buffers
     ice_cover = ws.ice_cover_buf # output: ice fraction
-    a_surf = ws.a_surf_buf    # surface albedo
-    albedo = ws.albedo_buf    # output: combined albedo (surface + atmosphere) [hernoemen]
-    a_atmos = ws.a_atmos_buf   # atmospheric albedo
-    sw = ws.sw_buf        # output: net shortwave flux
+    a_surf = ws.a_surf_buf       # surface albedo
+    albedo = ws.albedo_buf       # output: combined albedo (surface + atmosphere)
+    a_atmos = ws.a_atmos_buf     # atmospheric albedo
+    sw = ws.sw_buf               # output: net shortwave flux
 
     z_topo = fields.z_topo
     glacier = fields.glacier
 
-    # 1. Ice cover fraction – branch‑free with ifelse, vectorized
+    # 1. Ice cover fraction
     @turbo for i in 1:xdim, j in 1:ydim
         T = Ts[i, j]
         land_expr = ifelse(T <= Tl_ice1, 1.0,
@@ -31,11 +30,11 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
         ice_cover[i, j] = ifelse(z_topo[i, j] >= 0.0, land_expr, ocean_expr)
     end
 
-    # 2. Atmospheric albedo – simple multiplication, use broadcasting
+    # 2. Atmospheric albedo
     cld = @view fields.cldclim[:, :, timestate.ityr]
     @. a_atmos = cld * a_cloud
 
-    # 3. Surface albedo – conditional logic, @turbo beneficial
+    # 3. Surface albedo
     if cfg.log_ice
         @turbo for i in 1:xdim, j in 1:ydim
             T = Ts[i, j]
@@ -64,16 +63,12 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
     sw_solar = fields.sw_solar
     for j in 1:ydim
         sf = sw_solar[j, timestate.ityr] * multiplier
-        # @views: `albedo[:, j]` on the RHS of `@.` is plain getindex (not a
-        # dotview like the LHS), so without this it allocates a fresh
-        # Vector{Float64} every iteration.
         @views @. sw[:, j] = sf * (1.0 - albedo[:, j])
     end
 
     return (SW=sw, albedo=albedo, ice_cover=ice_cover)
 end
 
-# ── notebook cell c0c40037-4169-4d38-bebe-2086cebc24f2  (orig lines 1437-1476) ──
 """
     LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -86,12 +81,12 @@ touching the atmosphere's own emission term). Returns
 """
 function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
     # Extract workspace buffers
-    e_co2 = ws.e_co2_buf    # CO₂ [ppm scaled by pressure]
+    e_co2 = ws.e_co2_buf      # CO₂ [ppm scaled by pressure]
     e_vapor = ws.e_vapor_buf  # water vapour [kg/m²]
-    em = ws.em_buf       # emissivity ε_atmos
+    em = ws.em_buf            # emissivity ε_atmos
     LW_surf = ws.LW_surf_buf  # surface long-wave flux [W/m²]
     LW_down = ws.LW_down_buf  # downward long-wave flux [W/m²]
-    LW_up = ws.LW_up_buf    # upward long-wave flux [W/m²]
+    LW_up = ws.LW_up_buf      # upward long-wave flux [W/m²]
 
     wz_air = fields.wz_air
     co2_part = fields.co2_part
@@ -99,7 +94,7 @@ function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::Phy
     # Current cloud cover (climatology, 3D array)
     e_cloud = @view fields.cldclim[:, :, timestate.ityr]
 
-    ## 1. Effective columns (topography scaling via wz_air, precomputed)
+    ## 1. Effective columns (topography scaling via wz_air)
     @. e_vapor = wz_air * r_qviwv * q
     @. e_co2 = wz_air * CO2 * co2_part
 

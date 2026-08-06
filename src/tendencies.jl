@@ -1,4 +1,3 @@
-# ── notebook cell e493fae7-239a-494c-9a59-728446d70f7a  (orig lines 2080-2127) ──
 """
     tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
 
@@ -55,7 +54,6 @@ function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelStat
         em=lw_out.em)
 end
 
-# ── notebook cell 1894ad94-cdf8-4e79-a0e5-b72088db31be  (orig lines 2162-2343) ──
 """
     forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
 
@@ -69,15 +67,12 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     CO2 = cfg.co2_concentration
     sw_solar_forcing = 1.0
 
-    # Fast path for the main experiment: every branch below is a no-op for
-    # :full_model, but without this it still falls through all of them,
-    # including an allocating `string(cfg.experiment)` + `startswith` check
-    # (line ~154) on every single timestep of the most common run type.
+    # Fast path for the main experiment
     if cfg.experiment == :full_model
         return (CO2=CO2, sw_solar_forcing=sw_solar_forcing)
     end
 
-    # 📜 Legacy experiments ───────────
+    # - Legacy experiments ───────────
     if cfg.experiment == :constant_topo
         CO2 = 550.0  # 550 ppm CO₂ steady state
 
@@ -93,7 +88,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
             CO2 = CO2_2050 + 180.0 / 50.0 * (year - 2050)
         end
 
-        # 💨 CO₂ scaling experiments ──────────────────────────────────────────────
+    # - CO₂ scaling experiments ──────────────────────────────────────────────
     elseif cfg.experiment == :co2_double
         CO2 = 680.0  # 2×CO₂ (already set, but explicit)
 
@@ -109,7 +104,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     elseif cfg.experiment == :co2_zero
         CO2 = 0.0  # 0×CO₂ (no greenhouse effect)
 
-    # ☀️ Solar forcing experiments ───────────────────────────────────────────
+    # - Solar forcing experiments ───────────────────────────────────────────
     elseif cfg.experiment == :solar_plus27
         CO2 = 340.0
         sw_solar_forcing = (1365.0 + 27.0) / 1365.0
@@ -118,7 +113,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
         CO2 = 340.0
         sw_solar_forcing = (1365.0 + 1.0 * sin(2π * year / 11.0)) / 1365.0
 
-        # 📈 Enhanced A1B scenario ──────────────────────────────────────────────
+    # - Enhanced A1B scenario ──────────────────────────────────────────────
     elseif cfg.experiment == :a1b_enhanced
         CO2_1950 = 310.0;
         CO2_2000 = 370.0;
@@ -131,14 +126,14 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
             CO2 = CO2_2050 + 180.0 / 50.0 * (year - 2050)
         end
 
-        # ── Time-varying CO₂ experiments ────────────
+    # ── Time-varying CO₂ experiments ────────────
     elseif cfg.experiment == :co2_sine_wave
         CO2 = 340.0 + 170.0 + 170.0 * cos(2π * (year - 13.0) / 30.0)
 
     elseif cfg.experiment == :co2_step
         CO2 = year >= 1980 ? 340.0 : 680.0
 
-        # ── Paleoclimate experiments ────────────────────
+    # ── Paleoclimate experiments ────────────────────
     elseif cfg.experiment == :paleo_231kyr
         CO2 = 200.0
 
@@ -148,7 +143,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     elseif cfg.experiment == :modern_solar_paleo_co2
         CO2 = 200.0
 
-        # ── Orbital forcing experiments ─────────────────
+    # ── Orbital forcing experiments ─────────────────
     elseif cfg.experiment == :obliquity
         CO2 = 340.0     # Solar forcing loaded externally
 
@@ -159,7 +154,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
         CO2 = 340.0     # Solar constant varies with Earth-Sun distance
         sw_solar_forcing = (1.0 / (1.0 + 0.01 * cfg.earth_sun_distance_pct))^2
 
-    # 📂 File I/O dependent experiments (placeholders) ───────────────────────
+    # - File I/O dependent experiments (placeholders) ───────────────────────
     elseif cfg.experiment == :rcp26
         error("RCP2.6 scenario requires external CO₂ data file. Not yet implemented.")
 
@@ -175,18 +170,11 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     elseif cfg.experiment == :custom_co2
         error("Custom CO₂ scenario requires external trajectory file. Not yet implemented.")
 
-        # 🌍 Regional/partial CO₂ experiments — static masks ─────────────────────
-        # nh/sh/tropics/extratropics depend only on fixed latitude-row ranges,
-        # so their mask is set once in init_model! (IMPROVEMENTS.md §4.4) —
-        # nothing to recompute here every timestep.
+    # - Regional/partial CO₂ experiments — static masks ─────────────────────
     elseif cfg.experiment in (:regional_co2_nh, :regional_co2_sh, :regional_co2_tropics, :regional_co2_extratropics)
         CO2 = 680.0
 
-        # 🌍 Regional/partial CO₂ experiments — dynamic masks ────────────────────
-        # ocean/land_ice depend on icmn_ctrl (the control run's ice climatology),
-        # which doesn't exist at init_model! time — these two must stay
-        # recomputed every timestep. winter/summer don't touch co2_part at all
-        # (season-dependent, not region-dependent).
+    # - Regional/partial CO₂ experiments — dynamic masks ────────────────────
     elseif startswith(string(cfg.experiment), "regional_co2_")
         co2_part = fields.co2_part
         co2_part .= 1.0
@@ -234,7 +222,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
             CO2 = (ityr_step <= 181 || ityr_step >= 547) ? 340.0 : 680.0
         end
 
-        # 📊 Forced boundary condition experiments (handled in scenario loop) ─────
+        # - Forced boundary condition experiments (handled in scenario loop) ─────
     elseif cfg.experiment == :elnino || cfg.experiment == :lanina || cfg.experiment == :rcp85
         CO2 = 340.0
     end

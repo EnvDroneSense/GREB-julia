@@ -3,22 +3,16 @@ module GREB
 # =============================================================================
 # GREB — Globally Resolved Energy Balance model
 #
-# This module is a MECHANICAL extraction of the model definitions from the
-# Pluto notebook `notebooks/GREB_julia.jl`. Function/struct/const bodies are
-# copied VERBATIM (no logic changes). Only notebook scaffolding was removed:
-#   * Pluto cell markers (`# ╔═╡ …`) and the cell-order footer
-#   * markdown (`md"…"`) and `@bind` interactive-UI cells
-#   * two notebook-only helpers: `current_physics_config` (reads @bind widget
-#     globals) and `setup_benchmark` (BenchmarkTools/Profile) — reproduce their
-#     role from the driver script `examples/run_greb.jl` instead.
-# The original notebook is preserved unchanged under `notebooks/` for reference.
+# A global climate model that steps surface/air/ocean temperature and
+# humidity forward under shortwave/longwave radiation, hydrology, sea ice,
+# deep-ocean coupling, and atmospheric circulation (diffusion, advection,
+# moisture convergence). An interactive Pluto version of the same model
+# lives in `notebooks/GREB_julia.jl`; see the package docs or README for
+# usage.
 #
-# The module used to be a single 2245-line file; it's since been split into
-# topical files below (see claude/IMPROVEMENTS.md §1.2). The split is purely
-# mechanical — code was moved, not rewritten — and `include()` order follows
-# each file's actual dependencies (constants before everything; state before
-# the io/physics files that read its globals; physics/circulation before
-# tendencies; tendencies+postprocess before model).
+# Files below are included in dependency order: constants → config → state
+# → io → physics/{radiation,hydrology,ocean} → circulation → tendencies →
+# output → postprocess → model.
 # =============================================================================
 
 using LoopVectorization   # @turbo SIMD

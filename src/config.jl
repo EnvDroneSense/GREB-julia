@@ -1,4 +1,3 @@
-# ── notebook cell 19f106e4-2b82-47e1-9284-799a105f30cb  (orig lines 235-291) ──
 """
     PhysicsConfig
 
@@ -38,23 +37,9 @@ Base.@kwdef mutable struct PhysicsConfig
     # Hydrology Parameters
     log_rain::Int = 0
     log_eva::Int = -1
-    # Selects hydrology regression coefficients only (see
-    # set_hydrology_parameters!'s log_rain==0 NCEP-adjustment branch) — it
-    # does NOT select which climatology dataset load_greb_jld2! reads
-    # (that's its own, independent `dataset::Symbol` kwarg, :ncep/:era).
-    # The two are intentionally orthogonal (IMPROVEMENTS.md §4.2): a caller
-    # can legitimately combine log_clim=1 with dataset=:era for a
-    # sensitivity experiment. See load_greb_jld2!'s docstring (src/io.jl)
-    # for the other half of this cross-reference.
     log_clim::Int = 0
 
-    # External Forcing — intentional no-ops (IMPROVEMENTS.md §4.1). Fortran
-    # declares and namelist-reads these three too (greb.model.mscm.f90:152-
-    # 154,242) but never actually uses them anywhere in the 1500+ line
-    # source — genuinely dead upstream, not a missing-wiring bug. Kept here
-    # (rather than removed, unlike §4.1's other 4 switches) purely for
-    # structural fidelity with the Fortran switch family; there's no real
-    # external-forcing override behind them to wire up on either side.
+    # External Forcing — future implementation
     log_tsurf_ext::Bool = false
     log_hwind_ext::Bool = false
     log_omega_ext::Bool = false
@@ -70,7 +55,6 @@ Base.@kwdef mutable struct PhysicsConfig
     orbital_index::Int = 0
 
     # Earth-Sun distance experiment: percent change in orbital radius
-    # (Fortran's `dradius`; rS0 = (1/(1+0.01*earth_sun_distance_pct))^2)
     earth_sun_distance_pct::Float64 = 0.0
 
     # Hydrology parameters (calculated by set_hydrology_parameters!)
@@ -94,7 +78,6 @@ Base.@kwdef struct RunSpec
     scnr::Int = 1
 end
 
-# ── notebook cell bb82d1dc-8f08-4351-9371-a8efed1dd9bc  (orig lines 292-356) ──
 begin
     """
         create_experiment_config(experiment::Symbol) -> PhysicsConfig
@@ -132,10 +115,6 @@ begin
             return cfg
 
         elseif experiment == :solar_plus27
-            # The actual +27 W/m² effect is computed independently in
-            # forcing() (tendencies.jl) — no cfg field needs setting here.
-            # (IMPROVEMENTS.md §4.1: a former `cfg.solar_multiplier` field
-            # duplicated this and was never read; removed.)
             return PhysicsConfig(experiment=:solar_plus27)
 
         elseif experiment == :elnino
@@ -161,8 +140,7 @@ begin
     end
 end;
 
-# ── notebook cell d0d74213-96ad-4a45-9a31-37f640a21a45  (orig lines 378-400) ──
-# ⚙️ Optimized Parameter Initialization ──────────────────────────────────
+# - Optimized Parameter Initialization ──────────────────────────────────
 """
     set_hydrology_parameters!(cfg::PhysicsConfig)
 

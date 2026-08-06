@@ -10,7 +10,6 @@ const _HYDRO_CE_LAND = 0.25 * ce
 const _HYDRO_CE_OCEAN = 0.58 * ce
 const _HYDRO_CONST_LATENT = cq_latent * ρ_air * ce
 
-# ── notebook cell 606032a2-b2ca-4fd8-9930-afd83aecec7a  (orig lines 1495-1608) ──
 """
     hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
 
@@ -63,11 +62,7 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
         end
     end
 
-    # Relative humidity, captured from the Tsurf-based qs BEFORE the log_eva
-    # dispatch (Fortran: greb.model.mscm.f90:715-719, `rq = q/qs` happens
-    # before the log_eva branches). log_eva==0 below recomputes a different,
-    # Tskin-based qs for its own Qlat term only — rq/dq_rain must not see
-    # that recompute, which is why this is captured here, not after.
+    # Relative humidity
     @turbo for j in 1:ydim
         for i in 1:xdim
             ws.rq[i, j] = q[i, j] / max(ws.qs[i, j], 1e-8)
@@ -139,9 +134,7 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
         end
     end
 
-    # Apply rain limit. Spatially-varying (via wz_vapor's topographic scaling),
-    # not a single grid point — Fortran uses the full 2D field here
-    # (greb.model.mscm.f90:755: `wz_vapor * r_qviwv * 86400.`, no index).
+    # Apply rain limit
     if cfg.log_rain == 1
         @turbo for j in 1:ydim
             for i in 1:xdim

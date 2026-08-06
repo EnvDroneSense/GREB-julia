@@ -1,4 +1,3 @@
-# ── notebook cell d404043f-8080-4262-9ab6-d9bb13eee504  (orig lines 1200-1304) ──
 """
     init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
@@ -19,12 +18,6 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     # leak its stale mask into a later, unrelated run against it.
     fields.co2_part .= 1.0
 
-    # Four of the six regional_co2_* masks depend only on fixed latitude-row
-    # ranges — static for the whole run — so compute them once here instead
-    # of every timestep in forcing() (IMPROVEMENTS.md §4.4). The other two,
-    # :regional_co2_ocean/:regional_co2_land_ice, depend on the control run's
-    # ice climatology (icmn_ctrl, src/model.jl's `ice_forcing`), which doesn't
-    # exist yet at this point in the run — those stay computed in forcing().
     if cfg.experiment == :regional_co2_nh
         fields.co2_part[:, 1:24] .= 0.5
     elseif cfg.experiment == :regional_co2_sh
@@ -130,10 +123,10 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     end
 
     # ── Initial conditions from last time step of climatology ────
-    Ts_ini = Tclim[:, :, nstep_yr] |> copy   # surface temperature
-    Ta_ini = copy(Ts_ini)                      # air temperature = Tsurf
-    To_ini = fields.Toclim[:, :, nstep_yr] |> copy   # deep ocean temperature
-    q_ini = fields.qclim[:, :, nstep_yr] |> copy   # atmospheric water vapor
+    Ts_ini = Tclim[:, :, nstep_yr] |> copy          # surface temperature
+    Ta_ini = copy(Ts_ini)                           # air temperature = Tsurf
+    To_ini = fields.Toclim[:, :, nstep_yr] |> copy  # deep ocean temperature
+    q_ini = fields.qclim[:, :, nstep_yr] |> copy    # atmospheric water vapor
 
     # ── Control CO₂ level ───────────────────────────────────────
     CO2_ctrl = cfg.co2_concentration
@@ -145,14 +138,13 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     end
 
     if !cfg.log_co2_dmc
-        CO2_ctrl = 0.0  # Zero CO2 for deconstruction experiments
+        CO2_ctrl = 0.0  # 0 CO2 for deconstruction experiments
     end
 
     return (Ts_ini=Ts_ini, Ta_ini=Ta_ini, To_ini=To_ini,
         q_ini=q_ini, CO2_ctrl=CO2_ctrl)
 end
 
-# ── notebook cell 584e767e-4dc5-4821-af63-d6a825326d9e  (orig lines 2869-2928) ──
 """
     qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields, state, timestate, cfg, ws, time_flux)
 
@@ -190,12 +182,6 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state
         @. ws.Ts0_buf = ws.Ts0_buf + TFc * Δt / cap_surf
 
         # ── Air temperature ──────────────────────────────────
-        # No flux-correction term here (unlike Ts/To/q below) — this is
-        # intentional, not a gap: Fortran's own qflux_correction never
-        # nudges Ta toward a climatology either (greb.model.mscm.f90:566,
-        # `Ta0 = Ta1 + dTa + dTa_crcl`), and there is no `TaF_correct`
-        # array anywhere in the Fortran source. Verified directly, not
-        # assumed — see the regression test asserting this stays true.
         @. ws.Ta0_buf = Ta + tend.dTa_crcl + ΔT_AIR_FACTOR * (
             tend.LW_up + tend.LW_down - tend.em * tend.LW_surf +
             tend.Q_lat_air - tend.Q_sens
@@ -218,7 +204,7 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state
         surf = SurfaceState(ws.Ts0_buf, ws.Ta0_buf, ws.To0_buf, ws.q0_buf)
         diagnostics!(it, 0.0, CO2_ctrl, surf, tend, fields, state, timestate)
 
-        # Advance state (broadcast – same as `.=`)
+        # Advance state
         @. Ts = ws.Ts0_buf
         @. Ta = ws.Ta0_buf
         @. q = ws.q0_buf
@@ -227,9 +213,6 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state
     return nothing
 end
 
-# ── notebook cell 92c3bd68-bd07-4381-9c04-e6611650cd1e  (orig lines 2929-3043) ──
-# Experiments that swap in a full alternate (ydim, nstep_yr) solar-forcing
-# table, mirroring Fortran's `sw_solar = sw_solar_scnr` (log_exp 30/31/35/36).
 const _SOLAR_SWAP_FORCING_TYPE = Dict(
     :paleo_231kyr => :paleo,
     :paleo_solar_modern_co2 => :paleo,
@@ -255,8 +238,6 @@ resets/restores them per-run regardless.
 function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     jld2_dir::AbstractString="", fields::ClimateFields=ClimateFields())
     time_flux, time_ctrl, time_scnr = run.flux, run.ctrl, run.scnr
-    # Back up sw_solar so a paleo/orbital run's swapped table never leaks
-    # into a later run against the same (possibly reused) `fields` instance.
     sw_solar_backup = copy(fields.sw_solar)
     try
 
@@ -323,17 +304,12 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     end
 
     # ── Build ice climatology from control output ───────────────
-    # Compute annual mean ice cover from the stored control monthly means
-    # (Assuming control output contains monthly ice cover; adjust if needed)
     ice_forcing = compute_annual_ice_climatology(ctrl_output)
 
     # ── 4. Scenario run ─────────────────────────────────────────
     println("SCENARIO: ", cfg.experiment, "  time = ", time_scnr, " yr")
 
     # Paleo/orbital experiments: swap in the alternate solar-forcing table
-    # (Fortran: `sw_solar = sw_solar_scnr` at the start of the scenario run).
-    # :modern_solar_paleo_co2 intentionally does NOT swap solar — matches
-    # Fortran's log_exp==32, which only changes CO2.
     if haskey(_SOLAR_SWAP_FORCING_TYPE, cfg.experiment)
         forcing_type = _SOLAR_SWAP_FORCING_TYPE[cfg.experiment]
         println("% loading alternate solar forcing ($forcing_type)...")

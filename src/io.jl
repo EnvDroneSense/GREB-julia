@@ -1,5 +1,3 @@
-# ── notebook cell b303e4e9-49fa-45ad-967e-20f165fdf38c  (orig lines 73-112) ──
-# ── notebook cell 8578d6aa-2782-4279-8f6b-78194b8ecc10  (orig lines 113-140) ──
 """
     read_jld2(filepath::String)
 
@@ -60,7 +58,6 @@ function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::
     end
 end
 
-# ── notebook cell f578f25e-047e-4a7e-8483-d544c7b4bec3  (orig lines 750-772) ──
 """Load flux corrections from JLD2 files into `fields` (zeros if missing)"""
 function load_flux_corrections_jld2!(jld2_dir::String, fields::ClimateFields)
     correction_files = Dict(
@@ -82,18 +79,14 @@ function load_flux_corrections_jld2!(jld2_dir::String, fields::ClimateFields)
     end
 end
 
-# ── notebook cell 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3  (orig lines 877-977) ──
 """
     load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
 
 Load all GREB input data from JLD2 formatted files, returning a fresh
 [`ClimateFields`](@ref). `dataset` (`:ncep`/`:era`) selects which
-climatology *files* to read — this is intentionally independent from
-`PhysicsConfig.log_clim` (which only selects hydrology regression
-*coefficients* in [`set_hydrology_parameters!`](@ref); see its field
-comment in `src/config.jl`, IMPROVEMENTS.md §4.2). Nothing wires the two
-together, so mismatched combinations (e.g. `log_clim=1` with `dataset=:era`)
-are possible on purpose, for sensitivity experiments.
+climatology *files* to read; this is independent of `PhysicsConfig.log_clim`,
+which only selects hydrology regression *coefficients* in
+[`set_hydrology_parameters!`](@ref).
 """
 function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
     if !isdir(jld2_dir)

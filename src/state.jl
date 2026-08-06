@@ -1,4 +1,3 @@
-# ── notebook cell 80ac789e-4fe7-4184-9946-b8d7c24b04ea  (orig lines 408-544) ──
 begin
     """
             CirculationWorkspace
@@ -7,11 +6,7 @@ begin
         Reused across all time steps to eliminate allocations.
         """
     mutable struct CirculationWorkspace
-        # Polar sub-stepping buffers. Fortran computes the whole row's
-        # increment (dTxh) from the OLD T1h first, then applies it to the
-        # whole row at once (Jacobi) — dTxh is the scratch buffer for that
-        # increment, kept separate from T1h so the increment computation
-        # never reads a value already updated by the same sweep.
+        # Polar sub-stepping buffers.
         T1h::Vector{Float64}      # polar sub-stepping
         dTxh::Vector{Float64}     # polar increment (Jacobi scratch)
 
@@ -134,14 +129,11 @@ end;
 """
     SurfaceState
 
-Wraps a run's four persistent, in-place-mutated surface/atmosphere arrays
-(`Ts`, `Ta`, `To`, `q`) so [`diagnostics!`](@ref)/[`output!`](@ref)/
-[`time_loop!`](@ref)/[`qflux_correction!`](@ref) take one argument instead
-of four separately-ordered positional ones (IMPROVEMENTS.md §1.3 — the
-prior positional order genuinely differed between call sites: `time_loop!`
-took `Ts,Ta,q,To` while `diagnostics!`/`output!` took `Ts0,Ta0,To0,q0`).
-Just a reference wrapper around already-allocated arrays — construct once
-per run/call (like `ws`/`acc`), never inside the per-timestep loop.
+A run's current surface/atmosphere state — `Ts`, `Ta`, `To`, `q` — passed as
+one argument to [`diagnostics!`](@ref), [`output!`](@ref), [`time_loop!`](@ref),
+and [`qflux_correction!`](@ref). A thin reference wrapper around
+already-allocated arrays; construct once per run/call (like `ws`/`acc`),
+never inside the per-timestep loop.
 """
 struct SurfaceState
     Ts::Matrix{Float64}
@@ -150,7 +142,6 @@ struct SurfaceState
     q::Matrix{Float64}
 end
 
-# ── notebook cell b9f7bde9-0aa4-4075-8fb9-14f84db0b3fa  (orig lines 545-623) ──
 begin
     """
             MonthlyAccumulator
@@ -229,12 +220,6 @@ begin
     end
 end;
 
-# ── State structs (GREB.jl IMPROVEMENTS.md §1.1) ──
-# Replaces the ~35 mutable module-level globals that used to live here
-# (climatology, derived grid fields, flux corrections, the regional-CO2
-# mask, and the solar table) with one struct built by load_greb_jld2!/
-# load_flux_corrections_jld2! and threaded explicitly through every
-# physics/circulation/tendencies/model function as a `fields` argument.
 """
     ClimateFields
 
@@ -244,7 +229,7 @@ every physics function reads. One instance per `greb_model!` run; never
 shared as global state.
 """
 mutable struct ClimateFields
-    # 🗺️ 2D fields (xdim, ydim)
+    # 2D fields (xdim, ydim)
     z_topo::Matrix{Float64}      # topography [m] (<0: ocean)
     glacier::Matrix{Float64}     # glacier mask (>0.5: glacier)
     z_ocean::Matrix{Float64}     # derived ocean depth [m]
@@ -252,7 +237,7 @@ mutable struct ClimateFields
     wz_air::Matrix{Float64}      # exp(-z_topo / z_air)
     wz_vapor::Matrix{Float64}    # exp(-z_topo / z_vapor)
 
-    # 🌡️ 3D climate fields (xdim, ydim, nstep_yr)
+    # 3D climate fields (xdim, ydim, nstep_yr)
     Tclim::Array{Float64,3}      # surface temperature [K]
     uclim::Array{Float64,3}      # zonal wind [m/s]
     vclim::Array{Float64,3}      # meridional wind [m/s]
@@ -262,7 +247,7 @@ mutable struct ClimateFields
     omegastdclim::Array{Float64,3} # omega std deviation [Pa/s]
     wsclim::Array{Float64,3}       # wind speed [m/s]
 
-    # 📊 Anomaly fields for ENSO/climate-change experiments
+    # Anomaly fields for ENSO/climate-change experiments
     Tclim_anom_enso::Array{Float64,3}
     uclim_anom_enso::Array{Float64,3}
     vclim_anom_enso::Array{Float64,3}
@@ -274,7 +259,7 @@ mutable struct ClimateFields
     omegaclim_anom_cc::Array{Float64,3}
     wsclim_anom_cc::Array{Float64,3}
 
-    # 🌬️ Precomputed wind sign splits
+    # Precomputed wind sign splits
     uclim_m::Array{Float64,3}    # negative u components
     uclim_p::Array{Float64,3}    # positive u components
     vclim_m::Array{Float64,3}    # negative v components
@@ -284,16 +269,16 @@ mutable struct ClimateFields
     cldclim::Array{Float64,3}    # cloud cover fraction
     swetclim::Array{Float64,3}   # soil wetness [0-1]
 
-    # ☀️ Solar / radiation
+    # Solar / radiation
     sw_solar::Matrix{Float64}    # 24hr mean solar radiation [W/m²] (ydim, nstep_yr)
     dTrad::Array{Float64,3}      # Tatmos-radiation offset
 
-    # 🔧 Flux correction arrays (zeros unless loaded from file)
+    # Flux correction arrays (zeros unless loaded from file)
     TF_correct::Array{Float64,3}
     qF_correct::Array{Float64,3}
     ToF_correct::Array{Float64,3}
 
-    # 🌍 Regional CO₂ mask (1.0 = full CO₂, 0.5 = half CO₂)
+    # Regional CO₂ mask (1.0 = full CO₂, 0.5 = half CO₂)
     co2_part::Matrix{Float64}
 end
 
@@ -316,7 +301,6 @@ function ClimateFields()
     )
 end
 
-# ── notebook cell 047b312f-8d6c-4732-aa0b-bea3de3e99e2  (orig lines 984-1002, split: see constants.jl for the calendar-lookup consts from this cell) ──
 begin
     """
         TimeState
@@ -360,7 +344,6 @@ function ModelState()
     ModelState(1.0, (zeros(Float64, xdim, ydim) for _ in 1:11)...)
 end
 
-# ── notebook cell 7a06bf0d-a61c-4d28-b144-2725fe90ae62  (orig lines 1179-1182) ──
 """
     MonthlyRecord
 

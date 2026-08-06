@@ -1,16 +1,9 @@
-# ── notebook cell ba96178d-77d4-4f26-a94f-5ad43c5242db  (orig lines 1777-1888) ──
 """
     convergence!(T1, fields::ClimateFields, timestate, ws::CirculationWorkspace)
 
-Calculate moisture flux convergence using omega vertical velocity.
-
-Implements Eq. 18 from Stassen et al 2019.
-
-Args:
-    T1: Input field (typically specific humidity) [kg/kg]
-    fields: loaded climatology (reads `fields.omegaclim`)
-    timestate: Time state object
-    ws: Workspace for temporary arrays
+Moisture flux convergence from `T1` (specific humidity, `[kg/kg]`) and the
+current `fields.omegaclim` (vertical velocity), writing the tendency into
+`ws.dX_conv`. Implements Eq. 18 from Stassen et al. (2019).
 """
 function convergence!(T1, fields::ClimateFields, timestate, ws::CirculationWorkspace)
     omega = @view fields.omegaclim[:, :, timestate.ityr]
@@ -75,7 +68,6 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
 
         # ----- Zonal diffusion -----
         if dxlat[k] > 2.5e5   # mid‑latitudes, normal time step
-            # Complex stencil – keep @turbo
             @turbo for j in 1:xdim
                 jm1v = jm1[j];
                 jp1v = jp1[j]
@@ -98,7 +90,7 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 )
                 ws.dX_diff[j, k] += wz[j, k] * dTx
             end
-        else   # polar regions – sub‑timestepping (complex, keep @turbo)
+        else   # polar regions – sub‑timestepping
             # Number of sub‑steps for stability
             dd = max(1, round(Int, Δt_crcl / (dxlat[k]^2 / κ)))
             dtdff2 = Δt_crcl / dd
@@ -109,14 +101,7 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
             ws.T1h .= @view T1[:, k]
 
             for _ in 1:time2
-                # Jacobi: compute the whole row's increment from the OLD
-                # T1h first (greb.model.mscm.f90:983-1035 computes dTxh(:)
-                # entirely before doing `T1h = T1h + dTxh`) — writing into
-                # ws.T1h mid-sweep here would make later j's read values
-                # already updated by earlier j in the same sweep
-                # (Gauss-Seidel), which is both a different, unintended
-                # numerical scheme AND unsound under @turbo (which assumes
-                # no cross-iteration dependency).
+                # Jacobi
                 @turbo for j in 1:xdim
                     jm1v = jm1[j];
                     jp1v = jp1[j]
@@ -152,7 +137,6 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
     return nothing
 end
 
-# ── notebook cell 2bab06b9-ca98-4142-99cb-d2ad4f1cde93  (orig lines 1903-2046) ──
 """
     advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
 
@@ -261,7 +245,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                            wz[jp2, k] * (T1[j, k] - T1[jp2, k]))
                 ) / 3.0
             end
-        else               # polar regions – sub‑timestepping
+        else # polar regions – sub‑timestepping
             # Number of sub‑steps (CFL stability)
             dd = max(1, round(Int, Δt_crcl / (dxlat[k] / 10.0)))
             dtdff2 = Δt_crcl / dd
@@ -272,14 +256,11 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
             ws.T1h .= @view T1[:, k]
 
             for _ in 1:time2
-                # Jacobi: compute the whole row's increment from the OLD
-                # T1h first (greb.model.mscm.f90:1227-1228 computes dTxh(:)
-                # entirely before `T1h = T1h + dTxh`) — same reasoning as
-                # diffusion!'s polar branch above.
+                # Jacobi
                 @turbo for j in 1:xdim
                     jm1, jp1 = lon_jm1[j], lon_jp1[j]
                     jm2, jp2 = lon_jm2[j], lon_jp2[j]
-                    jm3, jp3 = lon_jm3[j], lon_jp3[j]   # precomputed!
+                    jm3, jp3 = lon_jm3[j], lon_jp3[j]
                     u_m = uclim_m_t[j, k]
                     u_p = uclim_p_t[j, k]
 
@@ -307,7 +288,6 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
     return nothing
 end
 
-# ── notebook cell db75ea52-9387-4c15-bde5-61777ac9b570  (orig lines 2047-2079) ──
 """
     circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
 
@@ -323,7 +303,7 @@ function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::Circulatio
         return nothing
     end
 
-    # Precompute flags (hoist conditionals)
+    # Precompute flags
     do_diff_v = cfg.log_vdif && h_scl == z_vapor
     do_diff_h = cfg.log_hdif && h_scl == z_air
     do_adv_v = cfg.log_vadv && h_scl == z_vapor
@@ -332,14 +312,6 @@ function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::Circulatio
 
     copyto!(ws.X_work, X_in)
 
-    # Fortran zeroes dx_diffuse/dx_advec/dx_conv once per circulation() call
-    # before its sub-step loop (greb.model.mscm.f90:856-858). diffusion!/
-    # advection! already fill! their own output whenever they're called, but
-    # convergence! only writes when do_conv is true — for h_scl==z_air that's
-    # always false, so without this ws.dX_conv would keep whatever the most
-    # recent z_vapor circulation! call (the previous timestep's, since
-    # tendencies! calls Ta's circulation! before q's) left behind, and leak
-    # a stale moisture-convergence term into every temperature sub-step.
     fill!(ws.dX_diff, 0.0)
     fill!(ws.dX_adv, 0.0)
     fill!(ws.dX_conv, 0.0)

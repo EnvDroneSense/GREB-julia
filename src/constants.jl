@@ -1,7 +1,5 @@
-# ── notebook cell 531589ab-c6b5-4048-9ba5-f9ad62ab00a6  (orig lines 202-227) ──
-# Note: this should be in the script
 begin
-    # 📐 Grid dimensions ──────────────────────────────────
+    # - Grid dimensions ──────────────────────────────────
     "Number of longitude grid points."
     const xdim = 96
     "Number of latitude grid points."
@@ -9,7 +7,7 @@ begin
     const dlon = 360.0 / xdim                       # longitude spacing [degrees]
     const dlat = 180.0 / ydim                       # latitude spacing  [degrees]
 
-    # ⏱️ Time stepping ────────────────────────────────────
+    # - Time stepping ────────────────────────────────────
     const ndays_yr = 365                            # days per year (no leap years)
     const Δt = 12.0 * 3600.0                        # main time step [s] (12 hours)
     const Δt_crcl = 1800.0                          # circulation sub-time step [s] (30 min)
@@ -18,26 +16,18 @@ begin
     const nstep_yr = Int(ndays_yr * ndt_days)
     const ntime = max(1, Int(round(Δt / Δt_crcl)))  # Number of sub-steps within one main time step
 
-    # 📅 Calendar constants ───────────────────────────────
+    # - Calendar constants ───────────────────────────────
     const cjday_mon = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     const jday_mon_cumsum = cumsum(cjday_mon)
 
-    # 🔢 Physical Constants & Numerical Limits ────────────
-    # Fortran's Tmin_limit=40 is a raw-Kelvin numerical-stability floor
-    # (greb.model.mscm.f90:470-477: `where(Ts0 .le. Tmin_limit) Ts0 = Tmin_limit`),
-    # but 40 K is colder than anywhere on Earth ever gets — it's a floor that
-    # can never physically bind, not a real numerical safety net. Kept at
-    # 233.15 K (-40°C) intentionally: a real, physically-plausible cold-extreme
-    # floor for Antarctic winter, on the judgment that the Fortran value isn't
-    # actually a target worth matching here.
+    # - Physical Constants & Numerical Limits ────────────
     const min_T_K = 273.15 - 40.0       # -40°C, minimum allowed surface/air temperature [K]
     const max_humidity_change = 0.020   # Maximum humidity increment [kg/kg]
     const min_humidity_change = 0.9     # Fraction of humidity that can be removed
 end;
 
-# ── notebook cell 32b531ab-ee71-4685-af65-a2bae0b868f6  (orig lines 363-377) ──
 begin
-    # 💧 Optimized Hydrology Parameter Lookup Table ────────────────────────
+    # - Optimized Hydrology Parameter Lookup Table ────────────────────────
     const HYDRO_PARAMS = Dict(
         -1 => (1.0, 0.0, 0.0, 0.0),                     # Original GREB
         1 => (-1.391649, 3.018774, 0.0, 0.0),           # +Relative humidity
@@ -47,7 +37,6 @@ begin
     )
 end;
 
-# ── notebook cell f8a2c2de-5045-4ab6-a6fa-7bca502afc9b  (orig lines 644-658) ──
 begin
     # ── Natural constants ────────────────────────────────────────────
     const const_pi = pi            # π (model precision)
@@ -62,7 +51,6 @@ begin
     const ε = 1.0                  # emissivity for IR
 end;
 
-# ── notebook cell b23bc922-e9bc-4012-9782-1258e3cc8e7b  (orig lines 659-736) ──
 begin
     # ── Column depths [m] ───────────────────────────────────────────
     const d_ocean = 50.0                        # ocean column
@@ -86,7 +74,7 @@ begin
     const Tl_ice1 = 273.15 - 10.0               # land: full ice albedo
     const Tl_ice2 = 273.15                      # land: no ice albedo
     const To_ice1 = 273.15 - 7.0                # ocean: full ice
-    const To_ice2 = 273.15 - 1.7                # ocean: no ic
+    const To_ice2 = 273.15 - 1.7                # ocean: no ice albedo
 
     # Precomputed inverse ranges (avoids division in hot loops)
     const inv_To_ice_range = 1.0 / (To_ice2 - To_ice1)
@@ -140,16 +128,13 @@ begin
     const lon_jp3 = [mod1(i+3, xdim) for i in 1:xdim]
 end
 
-# ── notebook cell 0dbfb663-46e7-4873-ac77-1e8e392fe69d  (orig lines 737-749, split: see state.jl for the mutable globals from this cell) ──
 const ΔT_AIR_FACTOR = Δt / cap_air
 
-# ── notebook cell 898dd5aa-5273-4833-9a4a-0f2b94cc8d38  (orig lines 779-782) ──
 const p_emi = [9.0721, 106.7252, 61.5562, 0.0179, 0.0028,
                0.0570, 0.3462, 2.3406, 0.7032, 1.0662]
 
-# ── notebook cell 047b312f-8d6c-4732-aa0b-bea3de3e99e2  (orig lines 984-1002, split: see state.jl for the TimeState struct from this cell) ──
 begin
-    # 📅 Precomputed Calendar Lookup
+    # Precomputed Calendar Lookup
     const max_timesteps = 200 * nstep_yr  # Support up to 200-year runs
     const calendar_lookup = [(
         day=mod((it - 1) ÷ ndt_days, ndays_yr) + 1,

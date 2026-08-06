@@ -1,4 +1,3 @@
-# ── notebook cell cc0e682c-8767-498e-8178-2de4e796b3a8  (orig lines 2355-2392) ──
 """
     diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields, state, timestate)
 
@@ -36,15 +35,7 @@ function diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields::ClimateFi
         state.ftmn ./= n;
         state.fqmn ./= n
 
-        # Global mean and sample points (°C). Area-weighted by cos(lat) to
-        # match Fortran's own gmean() (greb.model.mscm.f90:1497-1513:
-        # `w(i,:) = cos(lat); gmean = sum(data*w)/sum(w)`) — a plain
-        # unweighted mean overcounts the poles, which cover less real area
-        # than the equator. dxlat_grid is already cos(lat)-proportional
-        # (constants.jl); the proportionality constant cancels in the
-        # weighted-average ratio, so reusing it gives an identical result
-        # to Fortran's bare cos(lat) weight. Diagnostic-only — never stored
-        # in MonthlyRecord, so this can't change any returned model output.
+        # Global mean and sample points (°C)
         global_mean = sum(state.Tsmn[i, j] * dxlat_grid[j] for i in 1:xdim, j in 1:ydim) /
                       (xdim * sum(dxlat_grid)) - 273.15
         point1 = state.Tsmn[48, 27] - 273.15   # Tropical Pacific
@@ -70,7 +61,6 @@ function diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields::ClimateFi
     return nothing
 end
 
-# ── notebook cell dfdde9f1-b226-4af0-9ac2-36f1b01622fa  (orig lines 2405-2437) ──
 """
     output!(it, irec, mon, surf::SurfaceState, tend, ws, output_buf, acc, timestate)
 
@@ -83,7 +73,6 @@ circulation output.
 """
 function output!(it, irec, mon, surf::SurfaceState, tend, ws::CirculationWorkspace,
     output_buf::Vector{MonthlyRecord}, acc::MonthlyAccumulator, timestate)
-    # ----- SAFETY: clamp month to 1..12 -----
     mon = clamp(mon, 1, 12)
 
     accumulate!(acc, surf.Ts, surf.Ta, surf.To, surf.q, tend.albedo, tend.ice_cover,
@@ -114,7 +103,6 @@ function output!(it, irec, mon, surf::SurfaceState, tend, ws::CirculationWorkspa
     return (irec=irec, mon=mon)
 end
 
-# ── notebook cell 33fa7b1f-938b-481c-bf25-eca8d7fb33a7  (orig lines 2438-2500) ──
 """
     time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf, fields, state, ws, acc, timestate, cfg)
 
@@ -160,16 +148,7 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     # Deep ocean
     @. To = To + tend.dTo + ToF_corr
 
-    # Humidity: Fortran does two threshold-triggered replacements, not a
-    # standard clamp (greb.model.mscm.f90:481-483) — `dq<=-q1` replaces with
-    # -0.9*q1 (leaving dq UNCHANGED for the range between -q1 and -0.9*q1,
-    # unlike `clamp` which would pull anything below -0.9*q1 up to it), and
-    # `dq>0.020` replaces with 0.020. Also, when log_hydro_dmc==0 Fortran
-    # zeroes the ENTIRE dq afterward (greb.model.mscm.f90:486) — not just the
-    # eva/rain terms (already zero from hydro!'s own early return) but
-    # dq_crcl and qF_correct too, which the old `clamp`-based version never
-    # zeroed. tend.dq_eva/dq_rain are already the right values regardless of
-    # log_hydro_dmc (hydro! itself returns zero buffers when it's off).
+    # Humidity
     dq_eva_use = tend.dq_eva
     dq_rain_use = tend.dq_rain
     dq_crcl_use = cfg.log_crcl_dmc ? tend.dq_crcl : ws.crcl
