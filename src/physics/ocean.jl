@@ -41,10 +41,12 @@ function seaice!(Ts0, fields::ClimateFields, timestate, cfg::PhysicsConfig)
         @turbo for i in 1:xdim, j in 1:ydim
             cap_surf[i, j] = ifelse(z_topo[i, j] > 0.0, cap_land, cap_ocean * mld[i, j])
         end
-        return
     end
 
-    # Glacier override: ice sheets have land heat capacity
+    # Glacier override: ice sheets have land heat capacity. Applied
+    # unconditionally after the log_ice block, matching Fortran (no early
+    # return there — greb.model.mscm.f90:786-792) — previously this was
+    # skipped entirely whenever cfg.log_ice was false.
     @. cap_surf = ifelse(glacier > 0.5, cap_land, cap_surf)
 end
 
@@ -82,7 +84,14 @@ function deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfi
 
     # ── Entrainment & detrainment & turbulent mixing ──────
     @turbo for i in 1:xdim, j in 1:ydim
-        active = (z_topo[i, j] < 0.0) & (Ts[i, j] >= To_ice2)
+        is_ocean = z_topo[i, j] < 0.0
+        # Entrainment/detrainment require Ts >= To_ice2 (Fortran gates these
+        # two terms on the ice threshold); turbulent mixing below does NOT —
+        # it uses Tx = max(To_ice2, Ts) specifically so it stays well-defined
+        # under ice, and is masked on is_ocean alone (greb.model.mscm.f90:
+        # 818-821 vs 828-830). Gating turbulent mixing on Ts >= To_ice2 too
+        # would cut off ocean-atmosphere heat exchange under sea ice/winter.
+        active = is_ocean & (Ts[i, j] >= To_ice2)
         h_now = mld_now[i, j]
         h_prev = mld_prev[i, j]
         dh = h_now - h_prev
@@ -95,10 +104,10 @@ function deep_ocean!(Ts, To, fields::ClimateFields, timestate, cfg::PhysicsConfi
         dT_ocean_entr = ifelse(active & (dh > 0.0), c_effmix * (dh / h_now) *
                                                     (To[i, j] - Ts[i, j]), 0.0)
 
-        # Turbulent mixing (only when active)
+        # Turbulent mixing (ocean points only, regardless of ice threshold)
         Tx = ifelse(Ts[i, j] > To_ice2, Ts[i, j], To_ice2)
-        dTo_turb = ifelse(active, turb_coeff * (Tx - To[i, j]) / z_rem, 0.0)
-        dT_ocean_turb = ifelse(active, turb_coeff * (To[i, j] - Tx) / h_now, 0.0)
+        dTo_turb = ifelse(is_ocean, turb_coeff * (Tx - To[i, j]) / z_rem, 0.0)
+        dT_ocean_turb = ifelse(is_ocean, turb_coeff * (To[i, j] - Tx) / h_now, 0.0)
 
         # Combine (buffer was zeroed before loop)
         dTo[i, j] = dTo_entr + dTo_turb

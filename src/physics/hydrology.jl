@@ -54,12 +54,23 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
     cE_ocean = _HYDRO_CE_OCEAN
     const_latent = _HYDRO_CONST_LATENT
 
-    # Saturation humidity
+    # Saturation humidity (Tsurf-based)
     @turbo for j in 1:ydim
         for i in 1:xdim
             T = Ts[i, j] - 273.15
             ws.qs[i, j] = const_factor1 * exp(const_factor2 * T / (T + const_factor3)) * wz_air[i, j]
             ws.qs[i, j] = max(ws.qs[i, j], 1e-8)
+        end
+    end
+
+    # Relative humidity, captured from the Tsurf-based qs BEFORE the log_eva
+    # dispatch (Fortran: greb.model.mscm.f90:715-719, `rq = q/qs` happens
+    # before the log_eva branches). log_eva==0 below recomputes a different,
+    # Tskin-based qs for its own Qlat term only — rq/dq_rain must not see
+    # that recompute, which is why this is captured here, not after.
+    @turbo for j in 1:ydim
+        for i in 1:xdim
+            ws.rq[i, j] = q[i, j] / max(ws.qs[i, j], 1e-8)
         end
     end
 
@@ -121,19 +132,20 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
         error("Unknown log_eva value: $(cfg.log_eva). Valid values: -1, 0, 1, 2")
     end
 
-    # Precipitation - use ws.rq buffer
+    # Precipitation - ws.rq was captured before the log_eva dispatch above
     @turbo for j in 1:ydim
         for i in 1:xdim
-            ws.rq[i, j] = q[i, j] / max(ws.qs[i, j], 1e-8)
             ws.dq_rain_buf[i, j] = (c_q + c_rq * ws.rq[i, j] + c_omega * omega[i, j] + c_omegastd * omegastd[i, j]) * cq_rain * q[i, j]
         end
     end
 
-    # Apply rain limit
+    # Apply rain limit. Spatially-varying (via wz_vapor's topographic scaling),
+    # not a single grid point — Fortran uses the full 2D field here
+    # (greb.model.mscm.f90:755: `wz_vapor * r_qviwv * 86400.`, no index).
     if cfg.log_rain == 1
-        limit_val = -0.0015 / (wz_vapor[1, 1] * r_qviwv * 86400.0)
         @turbo for j in 1:ydim
             for i in 1:xdim
+                limit_val = -0.0015 / (wz_vapor[i, j] * r_qviwv * 86400.0)
                 ws.dq_rain_buf[i, j] = ifelse(ws.dq_rain_buf[i, j] >= limit_val, limit_val, ws.dq_rain_buf[i, j])
             end
         end

@@ -7,22 +7,24 @@ begin
         Reused across all time steps to eliminate allocations.
         """
     mutable struct CirculationWorkspace
-        # Polar sub-stepping buffer
+        # Polar sub-stepping buffers. Fortran computes the whole row's
+        # increment (dTxh) from the OLD T1h first, then applies it to the
+        # whole row at once (Jacobi) — dTxh is the scratch buffer for that
+        # increment, kept separate from T1h so the increment computation
+        # never reads a value already updated by the same sweep.
         T1h::Vector{Float64}      # polar sub-stepping
+        dTxh::Vector{Float64}     # polar increment (Jacobi scratch)
 
         # Circulation work arrays
         X_work::Matrix{Float64}   # circulation work array
         dX_diff::Matrix{Float64}  # diffusion output
         dX_adv::Matrix{Float64}   # advection output
         dX_conv::Matrix{Float64}  # convection output
-        dX_crcl::Matrix{Float64}  # circulation output
 
         # Tendency buffers
-        temp_buf::Matrix{Float64}   # general workspace
+        temp_buf::Matrix{Float64}   # general workspace (humidity-update scratch)
         Q_sens_buf::Matrix{Float64} # Sensible heat flux buffer
-        eva::Matrix{Float64}        # dq_eva
-        rain::Matrix{Float64}       # dq_rain
-        crcl::Matrix{Float64}       # dq_crcl
+        crcl::Matrix{Float64}       # dq_crcl (zero stand-in when log_crcl_dmc is off)
 
         # State buffers
         Ts0_buf::Matrix{Float64}    # Surface temperature output
@@ -76,15 +78,13 @@ begin
     function CirculationWorkspace()
         CirculationWorkspace(
             zeros(Float64, xdim),# T1h
+            zeros(Float64, xdim),# dTxh
             zeros(Float64, xdim, ydim),# X_work
             zeros(Float64, xdim, ydim),# dX_diff
             zeros(Float64, xdim, ydim),# dX_adv
             zeros(Float64, xdim, ydim),# dX_conv
-            zeros(Float64, xdim, ydim),# dX_crcl
             zeros(Float64, xdim, ydim),# temp_buf
             zeros(Float64, xdim, ydim),# Q_sens_buf
-            zeros(Float64, xdim, ydim),# rain
-            zeros(Float64, xdim, ydim),# eva
             zeros(Float64, xdim, ydim),# crcl
             # State buffers
             zeros(Float64, xdim, ydim),# Ts0_buf

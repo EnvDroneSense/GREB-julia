@@ -16,6 +16,16 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test GREB.nstep_yr == 730
     end
 
+    @testset "min_T_K is -40°C, a real cold-extreme floor" begin
+        # Fortran's Tmin_limit=40 is raw Kelvin (greb.model.mscm.f90:470-477)
+        # -- colder than anywhere on Earth ever gets, so it can never
+        # physically bind. Kept at 233.15 K (-40°C) intentionally: Fortran
+        # isn't always the right reference to match literally.
+        @test GREB.min_T_K == 233.15
+        Ts = fill(220.0, GREB.xdim, GREB.ydim)
+        @test all(==(233.15), max.(Ts, GREB.min_T_K))
+    end
+
     @testset "PhysicsConfig" begin
         cfg = PhysicsConfig()
         @test cfg isa PhysicsConfig
@@ -94,6 +104,103 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test dq_on != dq_off
     end
 
+    @testset "circulation! doesn't leak stale ws.dX_conv into a later h_scl==z_air call" begin
+        # Regression: circulation! relied on each kernel to zero its own
+        # ws.dX_* output, but convergence! only writes ws.dX_conv when
+        # do_conv is true — which is structurally always false for
+        # h_scl==z_air. A shared workspace reused across a vapor call (where
+        # do_conv is true) and a later air call would carry the vapor call's
+        # nonzero ws.dX_conv straight into the air call's sub-step
+        # accumulation. Fortran zeroes dx_diffuse/dx_advec/dx_conv once per
+        # circulation() call (greb.model.mscm.f90:856-858); disable diffusion
+        # and advection for the air call so its only possible nonzero
+        # contribution would be a leaked dX_conv.
+        fields = ClimateFields()
+        fields.omegaclim .= 0.01
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+
+        cfg_vapor = create_experiment_config(:full_model)
+        cfg_vapor.log_conv = true
+        q_in = fill(0.01, GREB.xdim, GREB.ydim)
+        dq_out = similar(q_in)
+        circulation!(q_in, GREB.z_vapor, dq_out, fields, ws, ts, cfg_vapor)
+        @test !all(iszero, dq_out)  # confirm convergence! actually ran and left ws.dX_conv nonzero
+
+        cfg_air = create_experiment_config(:full_model)
+        cfg_air.log_hdif = false
+        cfg_air.log_hadv = false
+        Ta_in = fill(280.0, GREB.xdim, GREB.ydim)
+        dTa_out = similar(Ta_in)
+        circulation!(Ta_in, GREB.z_air, dTa_out, fields, ws, ts, cfg_air)
+        @test all(iszero, dTa_out)
+    end
+
+    @testset "diffusion!/advection! polar sub-stepping uses Jacobi, not Gauss-Seidel" begin
+        # Regression: Fortran computes the whole row's increment (dTxh) from
+        # the OLD T1h first, then applies the clamp and adds it to the whole
+        # row at once (Jacobi: greb.model.mscm.f90:983-1036 for diffusion,
+        # :1227-1228 for advection). The prior Julia code wrote
+        # `ws.T1h[j] += dq` inside the same @turbo loop that computed dq, so
+        # later j read T1h values already updated by earlier j in the same
+        # sweep (Gauss-Seidel) — a different numerical scheme, and unsound
+        # under @turbo (which assumes no cross-iteration dependency).
+        #
+        # This test independently re-implements the polar branch's exact
+        # stencil as a plain (non-@turbo, provably order-safe) Jacobi
+        # reference and checks diffusion!'s actual output matches it — a
+        # Gauss-Seidel reimplementation would diverge from this reference
+        # for the nonuniform input below.
+        k = 5  # dxlat_grid[5] <= 2.5e5: triggers the polar sub-stepping branch
+        fields = ClimateFields()
+        for j in 1:GREB.ydim, i in 1:GREB.xdim
+            fields.wz_air[i, j] = 0.6 + 0.3 * sin(i / 5.0) * cos(j / 3.0)
+        end
+        T1 = [280.0 + 8.0 * sin(i / 4.0) + 3.0 * (i % 5) for i in 1:GREB.xdim, j in 1:GREB.ydim]
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+
+        GREB.diffusion!(T1, GREB.z_air, fields, ws, ts)
+        actual = copy(ws.dX_diff[:, k])
+
+        # Independent Jacobi reference for row k, mirroring the production
+        # stencil/coefficients exactly but with plain loops (no @turbo) so
+        # order-safety is guaranteed by construction.
+        wz = fields.wz_air
+        dxlat = GREB.dxlat_grid
+        dd = max(1, round(Int, GREB.Δt_crcl / (dxlat[k]^2 / GREB.κ)))
+        dtdff2 = GREB.Δt_crcl / dd
+        time2 = max(1, round(Int, GREB.Δt_crcl / dtdff2))
+        ccx2 = GREB.κ * dtdff2 / dxlat[k]^2
+        jm1, jp1 = GREB.lon_jm1, GREB.lon_jp1
+        jm2, jp2 = GREB.lon_jm2, GREB.lon_jp2
+        jm3, jp3 = GREB.lon_jm3, GREB.lon_jp3
+
+        T1h = copy(T1[:, k])
+        dTxh = similar(T1h)
+        for _ in 1:time2
+            for j in 1:GREB.xdim
+                jm1v, jp1v = jm1[j], jp1[j]
+                jm2v, jp2v = jm2[j], jp2[j]
+                jm3v, jp3v = jm3[j], jp3[j]
+                dTxh[j] = ccx2 * 0.05 * (
+                    10.0 * (wz[jm1v, k] * (T1h[jm1v] - T1h[j]) + wz[jp1v, k] * (T1h[jp1v] - T1h[j])) +
+                    4.0 * (wz[jm2v, k] * (T1h[jm2v] - T1h[jm1v]) + wz[jm1v, k] * (T1h[j] - T1h[jm1v])) +
+                    4.0 * (wz[jp1v, k] * (T1h[j] - T1h[jp1v]) + wz[jp2v, k] * (T1h[jp2v] - T1h[jp1v])) +
+                    1.0 * (wz[jm3v, k] * (T1h[jm3v] - T1h[jm2v]) + wz[jm2v, k] * (T1h[jm1v] - T1h[jm2v])) +
+                    1.0 * (wz[jp2v, k] * (T1h[jp1v] - T1h[jp2v]) + wz[jp3v, k] * (T1h[jp3v] - T1h[jp2v]))
+                )
+            end
+            for j in 1:GREB.xdim
+                dq = ifelse(dTxh[j] <= -T1h[j], -0.9 * T1h[j], dTxh[j])
+                T1h[j] += dq
+            end
+        end
+        expected = wz[:, k] .* (T1h .- T1[:, k])
+
+        @test actual ≈ expected
+    end
+
     @testset "co2_part regional CO2 mask resets between runs (no leak)" begin
         # Regression: co2_part used to be a module global only ever mutated by
         # forcing()'s regional_co2_* branches, with nothing resetting it at the
@@ -107,13 +214,13 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         fields = ClimateFields()
         cfg_regional = PhysicsConfig(experiment=:regional_co2_nh)
         redirect_stdout(devnull) do
-            greb_model!(0, 1, 1, cfg_regional; jld2_dir = "", fields = fields)
+            greb_model!(RunSpec(), cfg_regional; jld2_dir = "", fields = fields)
         end
         @test any(!=(1.0), fields.co2_part)  # regional run actually changed the mask
 
         cfg_plain = create_experiment_config(:full_model)
         redirect_stdout(devnull) do
-            greb_model!(0, 1, 0, cfg_plain; jld2_dir = "", fields = fields)
+            greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields)
         end
         @test all(==(1.0), fields.co2_part)  # init_model! resets it back to full CO2
     end
@@ -144,7 +251,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         # NaN without real JLD2 data — we only assert it runs and shapes are OK.
         cfg = create_experiment_config(:full_model)
         result = redirect_stdout(devnull) do
-            greb_model!(0, 1, 0, cfg; jld2_dir = "")
+            greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = "")
         end
         @test length(result.ctrl) == 12
         @test length(result.scnr) == 0
@@ -170,10 +277,40 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             cfg.log_eva = log_eva
             cfg.log_rain = log_rain
             result = redirect_stdout(devnull) do
-                greb_model!(0, 1, 0, cfg; jld2_dir = "")
+                greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = "")
             end
             @test length(result.ctrl) == 12
         end
+    end
+
+    @testset "hydro! log_rain==1 rain limit uses the full wz_vapor field, not a single point" begin
+        # Regression: the rain limit collapsed the spatially-varying
+        # wz_vapor field to a single grid point (wz_vapor[1,1], the
+        # Antarctic coast) and applied that one scalar globally. Fortran
+        # uses the full 2D field (greb.model.mscm.f90:755). Zero out
+        # c_q/c_rq/c_omega/c_omegastd so the pre-limit dq_rain is exactly
+        # 0.0 everywhere, guaranteeing the limit binds at every point
+        # regardless of hydrology parameterization.
+        fields = ClimateFields()
+        fields.wz_vapor .= 1.0
+        fields.wz_vapor[1, 1] = 1.0
+        fields.wz_vapor[50, 25] = 0.1
+        cfg = create_experiment_config(:full_model)
+        cfg.log_rain = 1
+        cfg.c_q = 0.0
+        cfg.c_rq = 0.0
+        cfg.c_omega = 0.0
+        cfg.c_omegastd = 0.0
+        ts = TimeState(1, 1)
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.02, GREB.xdim, GREB.ydim)
+        out = hydro!(Ts, q, fields, ts, cfg, CirculationWorkspace())
+
+        limit_1_1 = -0.0015 / (fields.wz_vapor[1, 1] * GREB.r_qviwv * 86400.0)
+        limit_50_25 = -0.0015 / (fields.wz_vapor[50, 25] * GREB.r_qviwv * 86400.0)
+        @test out.dq_rain[1, 1] ≈ limit_1_1
+        @test out.dq_rain[50, 25] ≈ limit_50_25
+        @test out.dq_rain[1, 1] != out.dq_rain[50, 25]
     end
 
     @testset "hydro! log_eva branches produce distinct output (not just distinct shape)" begin
@@ -231,6 +368,67 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test all(==(GREB.d_ocean), fields.mldclim)
     end
 
+    @testset "init_model! hoists static regional_co2 masks (nh/sh/tropics/extratropics)" begin
+        # Regression/coverage for IMPROVEMENTS.md §4.4's co2_part hoist:
+        # nh/sh/tropics/extratropics masks depend only on fixed latitude-row
+        # ranges, so they're now set once in init_model! instead of every
+        # timestep in forcing(). Confirm the mask is right at init, and that
+        # forcing() no longer touches co2_part for these four experiments.
+        fields = ClimateFields()
+        cfg = create_experiment_config(:full_model)
+        cfg.experiment = :regional_co2_nh
+        init_model!(cfg, fields)
+        @test all(==(0.5), fields.co2_part[:, 1:24])
+        @test all(==(1.0), fields.co2_part[:, 25:48])
+
+        fields.co2_part[1, 30] = 0.75  # sentinel outside the nh mask; forcing() must leave it alone
+        icmn_ctrl = zeros(Float64, GREB.xdim, GREB.ydim, 1)
+        forcing(1, 1970, cfg, fields, icmn_ctrl)
+        @test fields.co2_part[1, 30] == 0.75
+        @test fields.co2_part[1, 1] == 0.5
+    end
+
+    @testset "deep_ocean! turbulent mixing stays active under sea ice (Ts < To_ice2)" begin
+        # Regression: Fortran gates entrainment/detrainment on Ts>=To_ice2 but
+        # turbulent mixing only on z_topo<0 (ocean), using Tx=max(To_ice2,Ts)
+        # specifically so mixing stays well-defined under ice
+        # (greb.model.mscm.f90:818-830). Julia previously applied the
+        # combined ice-threshold mask to all four terms, silently zeroing
+        # turbulent mixing under sea ice/high-latitude winter.
+        fields = ClimateFields()
+        fields.z_topo .= -1.0             # ocean everywhere
+        fields.z_ocean .= 1000.0
+        fields.mldclim .= 50.0            # uniform -> dh == 0, isolates turbulent mixing
+        cfg = create_experiment_config(:full_model)
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+
+        Ts = fill(260.0, GREB.xdim, GREB.ydim)  # below To_ice2: entrainment/detrainment inactive
+        To = fill(270.0, GREB.xdim, GREB.ydim)
+        out = deep_ocean!(Ts, To, fields, ts, cfg, ws)
+
+        @test !all(iszero, out.dTo)
+        @test !all(iszero, out.dT_ocean)
+    end
+
+    @testset "seaice! glacier override applies even when log_ice is false" begin
+        # Regression: seaice!'s !cfg.log_ice branch returned early, skipping
+        # the glacier -> cap_land override that Fortran applies
+        # unconditionally afterward (greb.model.mscm.f90:786-792).
+        fields = ClimateFields()
+        fields.z_topo .= -1.0     # ocean point
+        fields.glacier .= 1.0     # glacier mask everywhere
+        fields.mldclim .= 50.0
+        fields.cap_surf .= 0.0    # distinct sentinel, easy to detect a missed override
+        cfg = create_experiment_config(:full_model)
+        cfg.log_ice = false
+        ts = TimeState(1, 1)
+        Ts0 = fill(280.0, GREB.xdim, GREB.ydim)
+
+        seaice!(Ts0, fields, ts, cfg)
+        @test all(==(GREB.cap_land), fields.cap_surf)
+    end
+
     @testset "LWradiation! log_atmos_dmc==false only zeros LW_down, not LW_up" begin
         # Regression: LWradiation! zeroed both LW_up and LW_down when
         # log_atmos_dmc was false. Fortran only zeros LWair_down; LWair_up is
@@ -278,7 +476,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             cfg = create_experiment_config(:paleo_231kyr)
             captured = mktemp() do path, io
                 result = redirect_stdout(io) do
-                    greb_model!(0, 1, 1, cfg; jld2_dir = tmpdir, fields = fields)
+                    greb_model!(RunSpec(), cfg; jld2_dir = tmpdir, fields = fields)
                 end
                 flush(io)
                 (result = result, text = read(path, String))
@@ -295,11 +493,37 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
 
             cfg_plain = create_experiment_config(:full_model)
             redirect_stdout(devnull) do
-                greb_model!(0, 1, 0, cfg_plain; jld2_dir = "", fields = fields)
+                greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields)
             end
             @test fields.sw_solar == saved_sw_solar
         finally
             rm(tmpdir; recursive = true, force = true)
+        end
+    end
+
+    @testset "log_hydro_dmc==false freezes humidity entirely (not just eva/rain)" begin
+        # Regression: Fortran zeroes the ENTIRE humidity increment when
+        # log_hydro_dmc==0 (greb.model.mscm.f90:486), including dq_crcl and
+        # qF_correct -- not just the eva/rain terms (already zero from
+        # hydro!'s own early return). circulation!(q, ...) runs regardless
+        # of log_hydro_dmc (it has its own, separate log_crcl_dmc/
+        # log_atmos_dmc gates), so before this fix a nonzero dq_crcl/
+        # qF_correct would still leak into q. With the whole run's
+        # log_hydro_dmc off, q must never move from its initial
+        # climatological value.
+        if !isdir(DATA_DIR)
+            @test_skip "greb_dataset_jld2/ not present"
+        else
+            fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
+            cfg = create_experiment_config(:full_model)
+            cfg.log_hydro_dmc = false
+            result = redirect_stdout(devnull) do
+                greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = DATA_DIR, fields = fields)
+            end
+            q_ini = fields.qclim[:, :, GREB.nstep_yr]
+            for rec in result.ctrl
+                @test all(isapprox.(rec.q, q_ini; atol = 1e-9))
+            end
         end
     end
 
@@ -315,39 +539,46 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
             cfg = create_experiment_config(:full_model)
             result = redirect_stdout(devnull) do
-                greb_model!(0, 1, 1, cfg; jld2_dir = DATA_DIR, fields = fields)
+                greb_model!(RunSpec(), cfg; jld2_dir = DATA_DIR, fields = fields)
             end
 
             gmean(x) = sum(x) / length(x)
             summarize(rec) = (Ts = gmean(rec.Ts), Ta = gmean(rec.Ta), q = gmean(rec.q))
 
+            # Reference values recomputed after this pass's bug fixes
+            # (circulation! dX_conv leak, deep_ocean! turbulent-mixing mask,
+            # hydro! rain limit, seaice! glacier override, hydro! rq ordering,
+            # diffusion!/advection! Jacobi fix, humidity update semantics) —
+            # real behavior changes, not codegen noise. min_T_K was tried and
+            # reverted (see IMPROVEMENTS.md §0.14), so these reflect the
+            # original -40°C floor.
             ctrl_ref = [
-                (Ts = 276.63389785254117, Ta = 279.00866451502094, q = 0.006482753121860039),
-                (Ts = 276.10017268626024, Ta = 278.6028937611816, q = 0.00668739684812687),
-                (Ts = 276.388442156017, Ta = 278.72573233878353, q = 0.00682808257230516),
-                (Ts = 278.0240233293377, Ta = 280.2529210112473, q = 0.0069966126325217304),
-                (Ts = 280.1031039537348, Ta = 282.36528370627616, q = 0.007328311804874635),
-                (Ts = 281.8344065444744, Ta = 284.2492873665963, q = 0.007855206540293952),
-                (Ts = 282.5448479815043, Ta = 285.1228519081824, q = 0.008283164031606735),
-                (Ts = 282.33125993398033, Ta = 285.01015360412885, q = 0.008281802705686745),
-                (Ts = 281.10070107454794, Ta = 283.7866724383352, q = 0.007863845803854849),
-                (Ts = 279.50072842405575, Ta = 282.120136024737, q = 0.0074703541057228795),
-                (Ts = 278.5348338548442, Ta = 281.16355100615056, q = 0.007309014153306267),
-                (Ts = 278.22816682437116, Ta = 280.9176480983989, q = 0.00738181681971089),
+                (Ts = 276.6376432475215, Ta = 279.0132752922387, q = 0.006483368265992144),
+                (Ts = 276.1076273785758, Ta = 278.6101854203388, q = 0.0066878269244861795),
+                (Ts = 276.3982313917197, Ta = 278.7355819769281, q = 0.006828203121749328),
+                (Ts = 278.033418596411, Ta = 280.2620085698279, q = 0.006996728195722164),
+                (Ts = 280.1103499917721, Ta = 282.3720691501376, q = 0.00732842859123354),
+                (Ts = 281.83909739745076, Ta = 284.25313867300514, q = 0.007855042454125112),
+                (Ts = 282.5491066792044, Ta = 285.12633793891365, q = 0.008282889952438756),
+                (Ts = 282.33494625480506, Ta = 285.0130523882134, q = 0.008281318600014156),
+                (Ts = 281.10617631470427, Ta = 283.7911113302602, q = 0.007863431467610265),
+                (Ts = 279.50523603155864, Ta = 282.12404966212097, q = 0.007469852856220665),
+                (Ts = 278.537108759095, Ta = 281.1654805465912, q = 0.0073083638644664516),
+                (Ts = 278.2347705686773, Ta = 280.9247609592766, q = 0.0073813136191502576),
             ]
             scnr_ref = [
-                (Ts = -0.007571634235747767, Ta = -0.007089308718986831, q = -4.081339012618789e-8),
-                (Ts = -0.0013551224242967384, Ta = -0.0015493313242557884, q = 9.102445459706407e-9),
-                (Ts = -0.00020442571918428195, Ta = -0.00024156781992338037, q = -9.271643775374363e-9),
-                (Ts = 6.182223824950188e-5, Ta = 4.783229922051947e-5, q = -2.8335690722745083e-10),
-                (Ts = 0.00012023495250817412, Ta = 0.00011472080648978878, q = 1.0168811376219707e-8),
-                (Ts = 7.681730417081879e-5, Ta = 7.920078250080638e-5, q = 1.3688500942266693e-8),
-                (Ts = 4.1195354445497686e-5, Ta = 4.141728412822133e-5, q = 9.129724929143924e-9),
-                (Ts = 2.7270105682110203e-5, Ta = 2.625888675127857e-5, q = 3.1258696700343723e-9),
-                (Ts = 6.585894956863248e-5, Ta = 5.939956210095539e-5, q = 3.2744319937734625e-9),
-                (Ts = 7.940477996446236e-5, Ta = 8.002416602393487e-5, q = 8.064962095321034e-10),
-                (Ts = 6.92322901695482e-5, Ta = 7.033208314480597e-5, q = -1.3232220798557476e-9),
-                (Ts = 4.8830913025488254e-5, Ta = 4.932494557094744e-5, q = -2.4602072149437726e-9),
+                (Ts = -0.007632155594618766, Ta = -0.007133529465347189, q = -4.9333976027584994e-8),
+                (Ts = -0.001309167326571708, Ta = -0.0015145523125641436, q = 1.030987112661906e-8),
+                (Ts = -0.00011935227909166186, Ta = -0.00015150845673007126, q = -8.811407575403715e-9),
+                (Ts = 0.00011412561624893656, Ta = 0.00010169282102569695, q = 7.191046358240965e-10),
+                (Ts = 0.0001557742243889431, Ta = 0.00015178409538934505, q = 1.282729300373303e-8),
+                (Ts = 9.186448051926958e-5, Ta = 9.533767452687043e-5, q = 1.5921599083929904e-8),
+                (Ts = 4.87049451490498e-5, Ta = 4.9187632382707847e-5, q = 1.0540113727968019e-8),
+                (Ts = 3.253222138257147e-5, Ta = 3.153559790906405e-5, q = 3.6892345609650163e-9),
+                (Ts = 8.00866341792994e-5, Ta = 7.24281415625589e-5, q = 4.179801343708237e-9),
+                (Ts = 9.394539367011155e-5, Ta = 9.5251277080081e-5, q = 9.7252510856804e-10),
+                (Ts = 7.547731804897885e-5, Ta = 7.672918591223999e-5, q = -2.129466956195276e-9),
+                (Ts = 5.324451949642286e-5, Ta = 5.3642668972774134e-5, q = -3.3368785465046947e-9),
             ]
 
             @test length(result.ctrl) == length(ctrl_ref)

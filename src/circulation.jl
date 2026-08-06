@@ -109,6 +109,14 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
             ws.T1h .= @view T1[:, k]
 
             for _ in 1:time2
+                # Jacobi: compute the whole row's increment from the OLD
+                # T1h first (greb.model.mscm.f90:983-1035 computes dTxh(:)
+                # entirely before doing `T1h = T1h + dTxh`) — writing into
+                # ws.T1h mid-sweep here would make later j's read values
+                # already updated by earlier j in the same sweep
+                # (Gauss-Seidel), which is both a different, unintended
+                # numerical scheme AND unsound under @turbo (which assumes
+                # no cross-iteration dependency).
                 @turbo for j in 1:xdim
                     jm1v = jm1[j];
                     jp1v = jp1[j]
@@ -117,7 +125,7 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                     jm3v = jm3[j];
                     jp3v = jp3[j]
 
-                    dq = ccx2 * 0.05 * (
+                    ws.dTxh[j] = ccx2 * 0.05 * (
                         10.0 * (wz[jm1v, k] * (ws.T1h[jm1v] - ws.T1h[j]) +
                                 wz[jp1v, k] * (ws.T1h[jp1v] - ws.T1h[j])) +
                         4.0 * (wz[jm2v, k] * (ws.T1h[jm2v] - ws.T1h[jm1v]) +
@@ -129,8 +137,9 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                         1.0 * (wz[jp2v, k] * (ws.T1h[jp1v] - ws.T1h[jp2v]) +
                                wz[jp3v, k] * (ws.T1h[jp3v] - ws.T1h[jp2v]))
                     )
-                    # Stability clamp
-                    dq = ifelse(dq <= -ws.T1h[j], -0.9 * ws.T1h[j], dq)
+                end
+                @turbo for j in 1:xdim
+                    dq = ifelse(ws.dTxh[j] <= -ws.T1h[j], -0.9 * ws.T1h[j], ws.dTxh[j])
                     ws.T1h[j] += dq
                 end
             end
@@ -263,7 +272,10 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
             ws.T1h .= @view T1[:, k]
 
             for _ in 1:time2
-                # One fused loop: compute increment and update in place
+                # Jacobi: compute the whole row's increment from the OLD
+                # T1h first (greb.model.mscm.f90:1227-1228 computes dTxh(:)
+                # entirely before `T1h = T1h + dTxh`) — same reasoning as
+                # diffusion!'s polar branch above.
                 @turbo for j in 1:xdim
                     jm1, jp1 = lon_jm1[j], lon_jp1[j]
                     jm2, jp2 = lon_jm2[j], lon_jp2[j]
@@ -271,7 +283,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                     u_m = uclim_m_t[j, k]
                     u_p = uclim_p_t[j, k]
 
-                    dq = ccx2 * (
+                    ws.dTxh[j] = ccx2 * (
                         -u_m * (10.0 * wz[jm1, k] * (ws.T1h[j] - ws.T1h[jm1]) +
                                 4.0 * wz[jm2, k] * (ws.T1h[jm1] - ws.T1h[jm2]) +
                                 1.0 * wz[jm3, k] * (ws.T1h[jm2] - ws.T1h[jm3])) +
@@ -279,9 +291,10 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                                4.0 * wz[jp2, k] * (ws.T1h[jp1] - ws.T1h[jp2]) +
                                1.0 * wz[jp3, k] * (ws.T1h[jp2] - ws.T1h[jp3]))
                     ) / 20.0
-
+                end
+                @turbo for j in 1:xdim
                     # Stability clamp (avoid negative water vapour)
-                    dq = ifelse(dq <= -ws.T1h[j], -0.9 * ws.T1h[j], dq)
+                    dq = ifelse(ws.dTxh[j] <= -ws.T1h[j], -0.9 * ws.T1h[j], ws.dTxh[j])
                     ws.T1h[j] += dq
                 end
             end
@@ -318,6 +331,18 @@ function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::Circulatio
     do_conv = cfg.log_conv && h_scl == z_vapor
 
     copyto!(ws.X_work, X_in)
+
+    # Fortran zeroes dx_diffuse/dx_advec/dx_conv once per circulation() call
+    # before its sub-step loop (greb.model.mscm.f90:856-858). diffusion!/
+    # advection! already fill! their own output whenever they're called, but
+    # convergence! only writes when do_conv is true — for h_scl==z_air that's
+    # always false, so without this ws.dX_conv would keep whatever the most
+    # recent z_vapor circulation! call (the previous timestep's, since
+    # tendencies! calls Ta's circulation! before q's) left behind, and leak
+    # a stale moisture-convergence term into every temperature sub-step.
+    fill!(ws.dX_diff, 0.0)
+    fill!(ws.dX_adv, 0.0)
+    fill!(ws.dX_conv, 0.0)
 
     for _tt in 1:ntime
         do_diff_v && diffusion!(ws.X_work, h_scl, fields, ws, timestate)

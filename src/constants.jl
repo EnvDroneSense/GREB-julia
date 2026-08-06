@@ -20,7 +20,14 @@ begin
     const jday_mon_cumsum = cumsum(cjday_mon)
 
     # 🔢 Physical Constants & Numerical Limits ────────────
-    const min_T_K = 233.15              # 273.15 - 40°C, minimum allowed surface temperature [K]
+    # Fortran's Tmin_limit=40 is a raw-Kelvin numerical-stability floor
+    # (greb.model.mscm.f90:470-477: `where(Ts0 .le. Tmin_limit) Ts0 = Tmin_limit`),
+    # but 40 K is colder than anywhere on Earth ever gets — it's a floor that
+    # can never physically bind, not a real numerical safety net. Kept at
+    # 233.15 K (-40°C) intentionally: a real, physically-plausible cold-extreme
+    # floor for Antarctic winter, on the judgment that the Fortran value isn't
+    # actually a target worth matching here.
+    const min_T_K = 273.15 - 40.0       # -40°C, minimum allowed surface/air temperature [K]
     const max_humidity_change = 0.020   # Maximum humidity increment [kg/kg]
     const min_humidity_change = 0.9     # Fraction of humidity that can be removed
 end;
