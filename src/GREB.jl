@@ -24,7 +24,7 @@ module GREB
 using LoopVectorization   # @turbo SIMD
 using JLD2
 
-export PhysicsConfig, CirculationWorkspace, MonthlyAccumulator, TimeState, MonthlyRecord
+export PhysicsConfig, RunSpec, CirculationWorkspace, MonthlyAccumulator, TimeState, MonthlyRecord
 export ClimateFields, ModelState
 export read_jld2, load_solar_forcing_jld2, load_flux_corrections_jld2!, load_greb_jld2!
 export create_experiment_config, set_hydrology_parameters!, init_model!
@@ -53,11 +53,11 @@ using PrecompileTools: @compile_workload
 @compile_workload begin
     redirect_stdout(devnull) do
         cfg = create_experiment_config(:full_model)
-        greb_model!(0, 1, 0, cfg; jld2_dir="")
+        greb_model!(RunSpec(scnr=0), cfg; jld2_dir="")
 
         cfg_eva0 = create_experiment_config(:full_model)
         cfg_eva0.log_eva = 0
-        greb_model!(0, 1, 0, cfg_eva0; jld2_dir="")
+        greb_model!(RunSpec(scnr=0), cfg_eva0; jld2_dir="")
     end
 end
 

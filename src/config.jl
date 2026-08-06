@@ -72,6 +72,20 @@ Base.@kwdef mutable struct PhysicsConfig
     c_omegastd::Float64 = 0.0
 end
 
+"""
+    RunSpec
+
+Run durations (in years) for [`greb_model!`](@ref): `flux` (flux-correction
+spin-up), `ctrl` (control run), `scnr` (scenario run). A keyword struct
+instead of three bare positional ints, whose order was easy to swap by
+mistake.
+"""
+Base.@kwdef struct RunSpec
+    flux::Int = 0
+    ctrl::Int = 1
+    scnr::Int = 1
+end
+
 # ── notebook cell bb82d1dc-8f08-4351-9371-a8efed1dd9bc  (orig lines 292-356) ──
 begin
     """

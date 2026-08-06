@@ -18,7 +18,7 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 > using GREB
 > cfg = create_experiment_config(:full_model)
 > load_greb_jld2!("greb_dataset_jld2"; dataset=:ncep)
-> result = greb_model!(0, 1, 1, cfg)   # (flux, ctrl, scenario) years
+> result = greb_model!(RunSpec(), cfg)   # flux=0, ctrl=1, scnr=1 years
 > ```
 > Run the tests with `julia --project=. -e 'using Pkg; Pkg.test()'`, or the full
 > driver with `julia --project=. examples/run_greb.jl <path/to/greb_dataset_jld2>`.

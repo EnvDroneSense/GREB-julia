@@ -175,42 +175,23 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     elseif cfg.experiment == :custom_co2
         error("Custom CO₂ scenario requires external trajectory file. Not yet implemented.")
 
-        # 🌍 Regional/partial CO₂ experiments ────────────────────────────────────
+        # 🌍 Regional/partial CO₂ experiments — static masks ─────────────────────
+        # nh/sh/tropics/extratropics depend only on fixed latitude-row ranges,
+        # so their mask is set once in init_model! (IMPROVEMENTS.md §4.4) —
+        # nothing to recompute here every timestep.
+    elseif cfg.experiment in (:regional_co2_nh, :regional_co2_sh, :regional_co2_tropics, :regional_co2_extratropics)
+        CO2 = 680.0
+
+        # 🌍 Regional/partial CO₂ experiments — dynamic masks ────────────────────
+        # ocean/land_ice depend on icmn_ctrl (the control run's ice climatology),
+        # which doesn't exist at init_model! time — these two must stay
+        # recomputed every timestep. winter/summer don't touch co2_part at all
+        # (season-dependent, not region-dependent).
     elseif startswith(string(cfg.experiment), "regional_co2_")
         co2_part = fields.co2_part
-        # Reset co2_part to full CO₂ first
         co2_part .= 1.0
 
-        if cfg.experiment == :regional_co2_nh
-            # 2×CO₂ Northern Hemisphere only
-            CO2 = 680.0
-            co2_part[:, 1:24] .= 0.5
-
-        elseif cfg.experiment == :regional_co2_sh
-            # 2×CO₂ Southern Hemisphere only
-            CO2 = 680.0
-            co2_part[:, 25:48] .= 0.5
-
-        elseif cfg.experiment == :regional_co2_tropics
-            # 2×CO₂ Tropics only
-            CO2 = 680.0
-            co2_part[:, 1:15] .= 0.5
-            co2_part[:, 33:48] .= 0.5
-            for i in 4:4:96
-                co2_part[i, 33] = 1.0
-                co2_part[i, 15] = 1.0
-            end
-
-        elseif cfg.experiment == :regional_co2_extratropics
-            # 2×CO₂ Extratropics only
-            CO2 = 680.0
-            co2_part[:, 16:32] .= 0.5
-            for i in 4:4:96
-                co2_part[i, 32] = 1.0
-                co2_part[i, 16] = 1.0
-            end
-
-        elseif cfg.experiment == :regional_co2_ocean
+        if cfg.experiment == :regional_co2_ocean
             # 2×CO₂ Ocean only
             CO2 = 680.0
             z_topo = fields.z_topo

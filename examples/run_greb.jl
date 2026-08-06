@@ -49,7 +49,8 @@ function run_greb(jld2_dir::AbstractString;
 
     # ── 3. run the model ────────────────────────────────────────────────────
     println("Running GREB (flux=$time_flux, ctrl=$time_ctrl, scnr=$time_scnr years)...")
-    result = greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir=jld2_dir, fields=fields)
+    run = RunSpec(flux=time_flux, ctrl=time_ctrl, scnr=time_scnr)
+    result = greb_model!(run, cfg; jld2_dir=jld2_dir, fields=fields)
     println("Run complete. control months: ", length(result.ctrl),
             ", scenario months: ", length(result.scnr))
 

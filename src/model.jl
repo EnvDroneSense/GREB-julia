@@ -19,6 +19,31 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     # leak its stale mask into a later, unrelated run against it.
     fields.co2_part .= 1.0
 
+    # Four of the six regional_co2_* masks depend only on fixed latitude-row
+    # ranges — static for the whole run — so compute them once here instead
+    # of every timestep in forcing() (IMPROVEMENTS.md §4.4). The other two,
+    # :regional_co2_ocean/:regional_co2_land_ice, depend on the control run's
+    # ice climatology (icmn_ctrl, src/model.jl's `ice_forcing`), which doesn't
+    # exist yet at this point in the run — those stay computed in forcing().
+    if cfg.experiment == :regional_co2_nh
+        fields.co2_part[:, 1:24] .= 0.5
+    elseif cfg.experiment == :regional_co2_sh
+        fields.co2_part[:, 25:48] .= 0.5
+    elseif cfg.experiment == :regional_co2_tropics
+        fields.co2_part[:, 1:15] .= 0.5
+        fields.co2_part[:, 33:48] .= 0.5
+        for i in 4:4:96
+            fields.co2_part[i, 33] = 1.0
+            fields.co2_part[i, 15] = 1.0
+        end
+    elseif cfg.experiment == :regional_co2_extratropics
+        fields.co2_part[:, 16:32] .= 0.5
+        for i in 4:4:96
+            fields.co2_part[i, 32] = 1.0
+            fields.co2_part[i, 16] = 1.0
+        end
+    end
+
     Tclim = fields.Tclim
     z_topo = fields.z_topo
 
@@ -207,10 +232,10 @@ const _SOLAR_SWAP_FORCING_TYPE = Dict(
 )
 
 """
-    greb_model!(time_flux, time_ctrl, time_scnr, cfg; jld2_dir="", fields=ClimateFields())
+    greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields())
 
-Run a GREB flux-correction spin-up (`time_flux` years), control run
-(`time_ctrl` years), and scenario run (`time_scnr` years) for `cfg`.
+Run a GREB flux-correction spin-up (`run.flux` years), control run
+(`run.ctrl` years), and scenario run (`run.scnr` years) for `cfg`.
 
 `fields` holds the loaded climatology/grid/flux-correction state (see
 [`ClimateFields`](@ref), built by [`load_greb_jld2!`](@ref)); it defaults to
@@ -221,8 +246,9 @@ of reloading it — that's the only case where `co2_part`/`sw_solar`
 mutations from one run could otherwise leak into the next; this function
 resets/restores them per-run regardless.
 """
-function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig;
+function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     jld2_dir::AbstractString="", fields::ClimateFields=ClimateFields())
+    time_flux, time_ctrl, time_scnr = run.flux, run.ctrl, run.scnr
     # Back up sw_solar so a paleo/orbital run's swapped table never leaks
     # into a later run against the same (possibly reused) `fields` instance.
     sw_solar_backup = copy(fields.sw_solar)
