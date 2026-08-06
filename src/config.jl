@@ -48,6 +48,14 @@ Base.@kwdef mutable struct PhysicsConfig
     # Solar forcing multiplier
     solar_multiplier::Float64 = 1.0
 
+    # Orbital-forcing experiments: which solar_scenarios table row to load
+    # (:eccentricity / :obliquity, see load_solar_forcing_jld2)
+    orbital_index::Int = 0
+
+    # Earth-Sun distance experiment: percent change in orbital radius
+    # (Fortran's `dradius`; rS0 = (1/(1+0.01*earth_sun_distance_pct))^2)
+    earth_sun_distance_pct::Float64 = 0.0
+
     # Hydrology parameters (calculated by set_hydrology_parameters!)
     c_q::Float64 = 1.0
     c_rq::Float64 = 0.0

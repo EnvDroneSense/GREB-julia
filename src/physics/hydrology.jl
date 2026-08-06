@@ -68,16 +68,33 @@ function hydro!(Ts, q, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace)
                 ws.Q_lat_buf[i, j] = ws.cE_buf[i, j] * wind * ρ_air * cq_latent * (q[i, j] - qs_val) * swet[i, j]
             end
         end
-    else
+    elseif cfg.log_eva == 1
+        gust_land_1 = 144.0
+        gust_ocean_1 = 50.41  # 7.1^2
         @turbo for j in 1:ydim
             for i in 1:xdim
                 u_val = u[i, j];
                 v_val = v[i, j]
                 wind = sqrt(u_val*u_val + v_val*v_val)
-                wind = sqrt(wind*wind + ifelse(z_topo[i, j] > 0.0, gust_land, gust_ocean))
-                ws.Q_lat_buf[i, j] = (q[i, j] - ws.qs[i, j]) * wind * const_latent * swet[i, j]
+                wind = sqrt(wind*wind + ifelse(z_topo[i, j] > 0.0, gust_land_1, gust_ocean_1))
+                coeff = ifelse(z_topo[i, j] > 0.0, 0.04, 0.73)
+                ws.Q_lat_buf[i, j] = (q[i, j] - ws.qs[i, j]) * wind * cq_latent * ρ_air * coeff * ce * swet[i, j]
             end
         end
+    elseif cfg.log_eva == 2
+        ws_view = @view wsclim[:, :, timestate.ityr]
+        gust_land_2 = 81.0  # 9.0^2
+        gust_ocean_2 = 16.0  # 4.0^2
+        @turbo for j in 1:ydim
+            for i in 1:xdim
+                wind = ws_view[i, j]
+                wind = sqrt(wind*wind + ifelse(z_topo[i, j] > 0.0, gust_land_2, gust_ocean_2))
+                coeff = ifelse(z_topo[i, j] > 0.0, 0.56, 0.79)
+                ws.Q_lat_buf[i, j] = (q[i, j] - ws.qs[i, j]) * wind * cq_latent * ρ_air * coeff * ce * swet[i, j]
+            end
+        end
+    else
+        error("Unknown log_eva value: $(cfg.log_eva). Valid values: -1, 0, 1, 2")
     end
 
     # Precipitation - use ws.rq buffer

@@ -39,11 +39,15 @@ function init_model!(cfg::PhysicsConfig)
         qclim .= 0.0  # zero out humidity climatology
     end
 
-    if !cfg.log_vapor_dmc
+    if !cfg.log_clouds_drsp
+        cldclim .= 0.7           # constant cloud cover (2xCO2 deconstruction)
+    end
+
+    if !cfg.log_humid_drsp
         qclim .= 0.0052          # constant water vapor
     end
 
-    if !cfg.log_ocean_dmc
+    if !cfg.log_ocean_drsp
         mldclim .= d_ocean       # no deep ocean
     end
 
@@ -171,7 +175,20 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, timestate, cfg::PhysicsConfi
 end
 
 # ── notebook cell 92c3bd68-bd07-4381-9c04-e6611650cd1e  (orig lines 2929-3043) ──
+# Experiments that swap in a full alternate (ydim, nstep_yr) solar-forcing
+# table, mirroring Fortran's `sw_solar = sw_solar_scnr` (log_exp 30/31/35/36).
+const _SOLAR_SWAP_FORCING_TYPE = Dict(
+    :paleo_231kyr => :paleo,
+    :paleo_solar_modern_co2 => :paleo,
+    :obliquity => :obliquity,
+    :eccentricity => :eccentricity,
+)
+
 function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_dir::AbstractString="")
+    # sw_solar is a shared module global; back it up so a paleo/orbital run's
+    # swapped table never leaks into a later, unrelated run in this session.
+    sw_solar_backup = copy(sw_solar)
+    try
 
     # ── 1. Initialisation ───────────────────────────────────────
     ini = init_model!(cfg)
@@ -241,6 +258,16 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     # ── 4. Scenario run ─────────────────────────────────────────
     println("SCENARIO: ", cfg.experiment, "  time = ", time_scnr, " yr")
 
+    # Paleo/orbital experiments: swap in the alternate solar-forcing table
+    # (Fortran: `sw_solar = sw_solar_scnr` at the start of the scenario run).
+    # :modern_solar_paleo_co2 intentionally does NOT swap solar — matches
+    # Fortran's log_exp==32, which only changes CO2.
+    if haskey(_SOLAR_SWAP_FORCING_TYPE, cfg.experiment)
+        forcing_type = _SOLAR_SWAP_FORCING_TYPE[cfg.experiment]
+        println("% loading alternate solar forcing ($forcing_type)...")
+        sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
+    end
+
     # Reset state to initial conditions
     Ts .= Ts_ini;
     Ta .= Ta_ini
@@ -293,4 +320,8 @@ function greb_model!(time_flux, time_ctrl, time_scnr, cfg::PhysicsConfig; jld2_d
     end
 
     return (ctrl=ctrl_output, scnr=scnr_output)
+
+    finally
+        sw_solar .= sw_solar_backup
+    end
 end

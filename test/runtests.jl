@@ -152,7 +152,7 @@ using Test
         # log_eva == 0 branch: it threw `type CirculationWorkspace has no
         # field cE` at runtime, but was invisible to the test above because
         # PhysicsConfig's default (log_eva = -1) never reached that branch.
-        for log_eva in (-1, 0, 1), log_rain in (-1, 0, 1, 2, 3)
+        for log_eva in (-1, 0, 1, 2), log_rain in (-1, 0, 1, 2, 3)
             cfg = create_experiment_config(:full_model)
             cfg.log_eva = log_eva
             cfg.log_rain = log_rain
@@ -160,6 +160,149 @@ using Test
                 greb_model!(0, 1, 0, cfg; jld2_dir = "")
             end
             @test length(result.ctrl) == 12
+        end
+    end
+
+    @testset "hydro! log_eva branches produce distinct output (not just distinct shape)" begin
+        # Regression: log_eva modes 1 and 2 used to fall through to an `else`
+        # branch that silently duplicated mode -1's formula (byte-identical
+        # Qlat/dq_eva output). The branch-coverage sweep above only checks
+        # output shape, which is exactly why this went undetected. Give the
+        # wind/wetness climatology a nonzero, non-uniform pattern so the
+        # different wind-gust/coefficient parameterizations actually diverge,
+        # then confirm all four log_eva values produce different dq_eva.
+        saved_u = copy(GREB.uclim)
+        saved_v = copy(GREB.vclim)
+        saved_swet = copy(GREB.swetclim)
+        saved_ws = copy(GREB.wsclim)
+        try
+            GREB.uclim .= 3.0
+            GREB.vclim .= 2.0
+            GREB.swetclim .= 0.5
+            GREB.wsclim .= 4.0
+
+            Ts = fill(290.0, GREB.xdim, GREB.ydim)
+            q = fill(0.005, GREB.xdim, GREB.ydim)
+            ts = TimeState(1, 1)
+
+            outputs = map((-1, 0, 1, 2)) do log_eva
+                cfg = create_experiment_config(:full_model)
+                cfg.log_eva = log_eva
+                copy(hydro!(Ts, q, ts, cfg, CirculationWorkspace()).dq_eva)
+            end
+
+            for i in 1:length(outputs), j in (i+1):length(outputs)
+                @test outputs[i] != outputs[j]
+            end
+        finally
+            GREB.uclim .= saved_u
+            GREB.vclim .= saved_v
+            GREB.swetclim .= saved_swet
+            GREB.wsclim .= saved_ws
+        end
+    end
+
+    @testset "hydro! errors on invalid log_eva" begin
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.005, GREB.xdim, GREB.ydim)
+        cfg = create_experiment_config(:full_model)
+        cfg.log_eva = 99
+        @test_throws ErrorException hydro!(Ts, q, TimeState(1, 1), cfg, CirculationWorkspace())
+    end
+
+    @testset "init_model! drsp climatology overrides use the correct switches" begin
+        # Regression: init_model! gated the qclim=0.0052 override on
+        # log_vapor_dmc (should be log_humid_drsp) and the mldclim=d_ocean
+        # override on log_ocean_dmc (should be log_ocean_drsp), and had no
+        # log_clouds_drsp -> cldclim=0.7 override at all — all three verified
+        # against the Fortran reference's `if(log_cloud_drsp==0) cldclim=0.7`
+        # / `log_humid_drsp` / `log_ocean_drsp` block.
+        saved_cld = copy(GREB.cldclim)
+        saved_q = copy(GREB.qclim)
+        saved_mld = copy(GREB.mldclim)
+        try
+            cfg = create_experiment_config(:full_model)
+            cfg.log_clouds_drsp = false
+            cfg.log_humid_drsp = false
+            cfg.log_ocean_drsp = false
+            init_model!(cfg)
+            @test all(==(0.7), GREB.cldclim)
+            @test all(==(0.0052), GREB.qclim)
+            @test all(==(GREB.d_ocean), GREB.mldclim)
+        finally
+            GREB.cldclim .= saved_cld
+            GREB.qclim .= saved_q
+            GREB.mldclim .= saved_mld
+        end
+    end
+
+    @testset "LWradiation! log_atmos_dmc==false only zeros LW_down, not LW_up" begin
+        # Regression: LWradiation! zeroed both LW_up and LW_down when
+        # log_atmos_dmc was false. Fortran only zeros LWair_down; LWair_up is
+        # snapshotted before the conditional zeroing and stays at its full
+        # computed value (decouples surface from atmospheric downwelling
+        # feedback without touching the atmosphere's own emission term).
+        ts = TimeState(1, 1)
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        Ta = fill(280.0, GREB.xdim, GREB.ydim)
+        q = fill(0.005, GREB.xdim, GREB.ydim)
+        CO2 = 340.0
+
+        cfg_on = create_experiment_config(:full_model)
+        out_on = LWradiation!(Ts, Ta, q, CO2, ts, cfg_on, CirculationWorkspace())
+
+        cfg_off = create_experiment_config(:full_model)
+        cfg_off.log_atmos_dmc = false
+        out_off = LWradiation!(Ts, Ta, q, CO2, ts, cfg_off, CirculationWorkspace())
+
+        @test all(iszero, out_off.LW_down)
+        @test !all(iszero, out_off.LW_up)
+        @test out_off.LW_up == out_on.LW_up
+    end
+
+    @testset "greb_model! swaps sw_solar for paleo experiments, restores after" begin
+        # Regression: paleo/orbital experiments never actually loaded the
+        # alternate solar-forcing table despite load_solar_forcing_jld2
+        # existing for exactly this purpose (Fortran: `sw_solar =
+        # sw_solar_scnr`). Since sw_solar is a shared module global (same
+        # leak hazard class as the co2_part bug), also confirm it's restored
+        # after the run and doesn't leak into a later, unrelated run.
+        saved_sw_solar = copy(GREB.sw_solar)
+        tmpdir = mktempdir()
+        try
+            mkpath(joinpath(tmpdir, "solar_scenarios"))
+            distinctive_value = 999.0
+            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_paleo.jld2"), "w") do file
+                file["data"] = fill(distinctive_value, GREB.ydim, GREB.nstep_yr)
+                file["dim_names"] = ["lat", "time"]
+            end
+
+            cfg = create_experiment_config(:paleo_231kyr)
+            captured = mktemp() do path, io
+                result = redirect_stdout(io) do
+                    greb_model!(0, 1, 1, cfg; jld2_dir = tmpdir)
+                end
+                flush(io)
+                (result = result, text = read(path, String))
+            end
+            @test length(captured.result.scnr) == 12
+            # Confirm the swap branch actually ran (fields are all-zero in
+            # this test env, so asserting on Ts/anomaly magnitude would be
+            # fragile — several other tests in this suite hit NaN for the
+            # same reason and only check shape/completion instead).
+            @test occursin("loading alternate solar forcing", captured.text)
+
+            # sw_solar restored to its pre-run value after greb_model! returns
+            @test GREB.sw_solar == saved_sw_solar
+
+            cfg_plain = create_experiment_config(:full_model)
+            redirect_stdout(devnull) do
+                greb_model!(0, 1, 0, cfg_plain; jld2_dir = "")
+            end
+            @test GREB.sw_solar == saved_sw_solar
+        finally
+            GREB.sw_solar .= saved_sw_solar
+            rm(tmpdir; recursive = true, force = true)
         end
     end
 

@@ -132,6 +132,7 @@ function forcing(it, year, cfg::PhysicsConfig, icmn_ctrl; nstep_yr=nstep_yr)
 
     elseif cfg.experiment == :earth_sun_distance
         CO2 = 340.0     # Solar constant varies with Earth-Sun distance
+        sw_solar_forcing = (1.0 / (1.0 + 0.01 * cfg.earth_sun_distance_pct))^2
 
     # 📂 File I/O dependent experiments (placeholders) ───────────────────────
     elseif cfg.experiment == :rcp26

@@ -93,7 +93,6 @@ function LWradiation!(Ts, Ta, q, CO2, timestate, cfg::PhysicsConfig, ws::Circula
 
     if !cfg.log_atmos_dmc
         LW_down .= 0.0
-        LW_up .= 0.0
     end
 
     return (LW_surf=LW_surf, LW_up=LW_up, LW_down=LW_down, em=em)
