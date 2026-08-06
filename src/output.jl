@@ -1,23 +1,23 @@
 # ── notebook cell cc0e682c-8767-498e-8178-2de4e796b3a8  (orig lines 2355-2392) ──
 """
-    diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, fields, state, timestate)
+    diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields, state, timestate)
 
 Accumulates the current timestep into `state`'s annual-mean buffers; at the
 last timestep of the year, averages them, prints the annual summary line
 (global mean + two sample points), and resets the accumulators for the next
-year.
+year. `tend` is the `NamedTuple` [`tendencies!`](@ref) returns.
 """
-function diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_lat, q_sens, fields::ClimateFields, state::ModelState, timestate)
+function diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields::ClimateFields, state::ModelState, timestate)
     # Accumulate
-    state.Tsmn .+= Ts0;
-    state.Tamn .+= Ta0;
-    state.Tomn .+= To0
-    state.qmn .+= q0;
-    state.amn .+= albedo
-    state.swmn .+= sw;
-    state.lwmn .+= lw_surf
-    state.qlatmn .+= q_lat;
-    state.qsensmn .+= q_sens
+    state.Tsmn .+= surf.Ts;
+    state.Tamn .+= surf.Ta;
+    state.Tomn .+= surf.To
+    state.qmn .+= surf.q;
+    state.amn .+= tend.albedo
+    state.swmn .+= tend.SW;
+    state.lwmn .+= tend.LW_surf
+    state.qlatmn .+= tend.Q_lat;
+    state.qsensmn .+= tend.Q_sens
     state.ftmn .+= @view fields.TF_correct[:, :, timestate.ityr]
     state.fqmn .+= @view fields.qF_correct[:, :, timestate.ityr]
 
@@ -36,8 +36,17 @@ function diagnostics!(it, year, CO2, Ts0, Ta0, To0, q0, albedo, sw, lw_surf, q_l
         state.ftmn ./= n;
         state.fqmn ./= n
 
-        # Global mean and sample points (°C)
-        global_mean = sum(state.Tsmn) / (xdim * ydim) - 273.15
+        # Global mean and sample points (°C). Area-weighted by cos(lat) to
+        # match Fortran's own gmean() (greb.model.mscm.f90:1497-1513:
+        # `w(i,:) = cos(lat); gmean = sum(data*w)/sum(w)`) — a plain
+        # unweighted mean overcounts the poles, which cover less real area
+        # than the equator. dxlat_grid is already cos(lat)-proportional
+        # (constants.jl); the proportionality constant cancels in the
+        # weighted-average ratio, so reusing it gives an identical result
+        # to Fortran's bare cos(lat) weight. Diagnostic-only — never stored
+        # in MonthlyRecord, so this can't change any returned model output.
+        global_mean = sum(state.Tsmn[i, j] * dxlat_grid[j] for i in 1:xdim, j in 1:ydim) /
+                      (xdim * sum(dxlat_grid)) - 273.15
         point1 = state.Tsmn[48, 27] - 273.15   # Tropical Pacific
         point2 = state.Tsmn[16, 38] - 273.15   # Hamburg/North Europe
 
@@ -63,18 +72,22 @@ end
 
 # ── notebook cell dfdde9f1-b226-4af0-9ac2-36f1b01622fa  (orig lines 2405-2437) ──
 """
-    output!(it, irec, mon, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens, output_buf, acc, timestate)
+    output!(it, irec, mon, surf::SurfaceState, tend, ws, output_buf, acc, timestate)
 
 Accumulates the current timestep into `acc`; on the last timestep of `mon`,
 pushes a monthly-mean [`MonthlyRecord`](@ref) onto `output_buf`, resets `acc`,
-and advances to the next month. Returns `(irec, mon)`.
+and advances to the next month. Returns `(irec, mon)`. `tend` is the
+`NamedTuple` [`tendencies!`](@ref) returns; `ws.precip_out`/`evap_out`/
+`qcrcl_out` hold this step's converted precipitation/evaporation/moisture-
+circulation output.
 """
-function output!(it, irec, mon, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens,
+function output!(it, irec, mon, surf::SurfaceState, tend, ws::CirculationWorkspace,
     output_buf::Vector{MonthlyRecord}, acc::MonthlyAccumulator, timestate)
     # ----- SAFETY: clamp month to 1..12 -----
     mon = clamp(mon, 1, 12)
 
-    accumulate!(acc, Ts0, Ta0, To0, q0, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens)
+    accumulate!(acc, surf.Ts, surf.Ta, surf.To, surf.q, tend.albedo, tend.ice_cover,
+        ws.precip_out, ws.evap_out, ws.qcrcl_out, tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens)
 
     # ----- Check end of month -----
     if timestate.jday == jday_mon_cumsum[mon] && (it % ndt_days == 0)
@@ -178,12 +191,9 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
 
 
     # Output and diagnostics
-    (mon, irec) = output!(it, irec, mon, Ts, Ta, To, q, tend.albedo,
-        tend.ice_cover, ws.precip_out, ws.evap_out, ws.qcrcl_out,
-        tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens,
-        output_buf, acc, timestate)
-    diagnostics!(it, year, CO2, Ts, Ta, To, q, tend.albedo,
-        tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens, fields, state, timestate)
+    surf = SurfaceState(Ts, Ta, To, q)
+    (mon, irec) = output!(it, irec, mon, surf, tend, ws, output_buf, acc, timestate)
+    diagnostics!(it, year, CO2, surf, tend, fields, state, timestate)
 
     return (mon=mon, irec=irec)
 end

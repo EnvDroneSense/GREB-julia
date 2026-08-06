@@ -83,7 +83,18 @@ function load_flux_corrections_jld2!(jld2_dir::String, fields::ClimateFields)
 end
 
 # ── notebook cell 2bf0fe8e-5718-4c1e-863b-85db7b3ae7f3  (orig lines 877-977) ──
-"""Load all GREB input data from JLD2 formatted files, returning a fresh [`ClimateFields`](@ref)"""
+"""
+    load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
+
+Load all GREB input data from JLD2 formatted files, returning a fresh
+[`ClimateFields`](@ref). `dataset` (`:ncep`/`:era`) selects which
+climatology *files* to read — this is intentionally independent from
+`PhysicsConfig.log_clim` (which only selects hydrology regression
+*coefficients* in [`set_hydrology_parameters!`](@ref); see its field
+comment in `src/config.jl`, IMPROVEMENTS.md §4.2). Nothing wires the two
+together, so mismatched combinations (e.g. `log_clim=1` with `dataset=:era`)
+are possible on purpose, for sensitivity experiments.
+"""
 function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
     if !isdir(jld2_dir)
         error("JLD2 directory not found: $jld2_dir")

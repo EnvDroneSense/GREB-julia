@@ -131,6 +131,25 @@ begin
     end
 end;
 
+"""
+    SurfaceState
+
+Wraps a run's four persistent, in-place-mutated surface/atmosphere arrays
+(`Ts`, `Ta`, `To`, `q`) so [`diagnostics!`](@ref)/[`output!`](@ref)/
+[`time_loop!`](@ref)/[`qflux_correction!`](@ref) take one argument instead
+of four separately-ordered positional ones (IMPROVEMENTS.md §1.3 — the
+prior positional order genuinely differed between call sites: `time_loop!`
+took `Ts,Ta,q,To` while `diagnostics!`/`output!` took `Ts0,Ta0,To0,q0`).
+Just a reference wrapper around already-allocated arrays — construct once
+per run/call (like `ws`/`acc`), never inside the per-timestep loop.
+"""
+struct SurfaceState
+    Ts::Matrix{Float64}
+    Ta::Matrix{Float64}
+    To::Matrix{Float64}
+    q::Matrix{Float64}
+end
+
 # ── notebook cell b9f7bde9-0aa4-4075-8fb9-14f84db0b3fa  (orig lines 545-623) ──
 begin
     """

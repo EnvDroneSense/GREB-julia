@@ -1,6 +1,6 @@
 # GREB.jl — Potential Improvements (Structure & Performance)
 
-Observations and fixes for the `GREB` module, accumulated across six audit
+Observations and fixes for the `GREB` module, accumulated across seven audit
 passes (2026-08-05 through 2026-08-06). The model was split from a single
 2245-line `src/GREB.jl` into topical files under `src/` (§1.2) and its ~40
 mutable module-level globals were replaced with explicit `ClimateFields`/
@@ -192,12 +192,22 @@ dependency order: `constants.jl` → `config.jl` → `state.jl` → `io.jl` →
 `tendencies.jl` → `output.jl` → `postprocess.jl` → `model.jl`. Pure move, no
 logic changed.
 
-### 1.3 Collapse giant positional argument lists into structs — still deferred
-`output!`/`diagnostics!`/`time_loop!` still take ~10–20 positional arrays
-(`Ts0`/`Ta0`/`To0`/`q0`/`albedo`/...) alongside the `fields`/`state` params
-from §1.1 — those were already function-local, not part of the global-state
-bug class, so out of §1.1's scope. A `SurfaceState`-style struct remains a
-real readability win, not yet done.
+### 1.3 Collapse giant positional argument lists into structs ✅ done
+`output!`/`diagnostics!` took 9–13 positional `(xdim,ydim)` matrices each.
+Checked which of those args were genuinely new state to wrap vs. things
+already sitting on an existing object: `Ts0/Ta0/To0/q0` are one cohesive,
+persistently-allocated "current surface state" (new `SurfaceState` struct,
+`src/state.jl`), but `albedo`/`sw`/`lw_surf`/`q_lat`/`q_sens`/`ice`/`precip`/
+`evap`/`qcrcl` already live on the `tend` `NamedTuple` `tendencies!` returns
+every call, or on `ws::CirculationWorkspace` (`ws.precip_out`/`evap_out`/
+`qcrcl_out`) — so the fix passes `surf`/`tend`/`ws` through instead of
+manually unpacking their fields at each call site, rather than inventing a
+second struct that would just duplicate what already exists. Zero new
+allocations: both `tend` and `ws` already exist at every call site,
+`SurfaceState` just wraps existing arrays by reference. Bonus: fixed a real
+footgun in the process — `time_loop!`'s old positional order was
+`Ts,Ta,q,To` while `diagnostics!`/`output!`'s was `Ts0,Ta0,To0,q0` (`q`/`To`
+swapped) — named struct fields make that ordering irrelevant.
 
 ### 1.4 Turn run durations into a `RunSpec` ✅ done
 `greb_model!(time_flux, time_ctrl, time_scnr, cfg; ...)`'s three
@@ -349,53 +359,98 @@ not a silent change made in passing during a perf-focused pass.
   (default on) to additionally skip the golden snapshot test locally even
   when `greb_dataset_jld2/` is present, alongside the existing `DATA_DIR`
   gate.
-- **Remaining gaps**: `qflux_correction!`'s loop body has zero coverage
-  (every test uses `time_flux=0`; README's own "Known Issues" flags this
-  module as possibly broken) — worth a dedicated look. Most `experiment`
-  symbols (only 9 of ~25+) are unreachable via `create_experiment_config`.
-  `build_monthly_climatology`/`apply_scenario_anomalies` are undertested.
-  `load_greb_jld2!`/`load_flux_corrections_jld2!`'s "file exists" branches
-  are untested without the real dataset.
+- **Testing gaps** ✅ closed:
+  - `qflux_correction!`'s loop body had zero coverage. Checked the Fortran
+    reference directly for the one thing that looked like a real bug — Julia
+    gives `Ts`/`To`/`q` climatology-forced correction fields but never `Ta`.
+    **Confirmed intentional, not a bug**: Fortran's own `qflux_correction`
+    (`greb.model.mscm.f90:540-597`) does the identical thing — no
+    `TaF_correct` array exists anywhere in the Fortran source either. Added a
+    test asserting `Ts`/`To`/`q` land exactly on their climatology targets
+    (the correction's algebraic fixed point) plus a code comment citing the
+    Fortran lines, so nobody "fixes" the asymmetry by mistake later.
+  - Added a sweep test covering the ~20 `:experiment` symbols `forcing()`/
+    `init_model!` handle but `create_experiment_config` doesn't build presets
+    for — reachable by constructing `PhysicsConfig(experiment=:foo)`
+    directly. Caught a real gotcha while writing it: `forcing()` only runs
+    during the *scenario* loop, never control, so the sweep needs
+    `RunSpec()`'s default `scnr=1` — `RunSpec(scnr=0)` would have made the
+    whole sweep silently vacuous.
+  - Added direct unit tests for `build_monthly_climatology`/
+    `apply_scenario_anomalies` (multi-year averaging, the non-12-multiple
+    `records[1]` fallback branch, empty/mismatched inputs) — previously only
+    exercised indirectly through 2 full-model-run tests.
+  - Added synthetic-dataset tests (`mktempdir`+`jldopen`, same pattern as the
+    paleo-swap test) for `load_greb_jld2!`/`load_flux_corrections_jld2!`'s
+    "file present" branches, previously only covered when the real
+    (gitignored) dataset happened to be present locally.
 
 ---
 
 ## 4. Findings needing domain/design input — documented, not fixed
 
-### 4.1 Seven config switches wired to nothing
-`solar_multiplier`, `log_vapor_drsp`, `log_ice_drsp`, `log_tsurf_ext`,
-`log_hwind_ext`, `log_omega_ext`, `log_ice_dmc` are set but never read by any
-physics function. Same bug class as §0.2–0.18, but wiring 7 features up (or
-removing them) is a scope decision.
+### 4.1 Seven config switches wired to nothing ✅ resolved
+Checked each of `solar_multiplier`/`log_vapor_drsp`/`log_ice_drsp`/
+`log_tsurf_ext`/`log_hwind_ext`/`log_omega_ext`/`log_ice_dmc` against
+`greb.model.mscm.f90` directly, then asked the user what to do with each
+category found:
+- `log_vapor_drsp`/`log_ice_drsp`/`log_ice_dmc`/`solar_multiplier` have zero
+  Fortran basis (no equivalent variable exists there at all, or — for
+  `solar_multiplier` — the real effect is already computed correctly
+  elsewhere, in `forcing()`'s `:solar_plus27` branch). **Removed** from
+  `PhysicsConfig`, including the one dead assignment to `solar_multiplier`
+  in `create_experiment_config(:solar_plus27)`.
+- `log_tsurf_ext`/`log_hwind_ext`/`log_omega_ext` ARE declared and
+  namelist-read in Fortran (`greb.model.mscm.f90:152-154,242`) but never
+  used there either — genuinely dead upstream, not a missing-wiring bug.
+  **Kept**, with a comment explaining why, for structural fidelity with the
+  Fortran switch family.
 
-### 4.2 `log_clim` doesn't select the ERA/NCEP dataset its label implies
-Only swaps 4 regression coefficients; the real ERA-vs-NCEP choice is the
-disconnected `dataset` kwarg to `load_greb_jld2!`. Deciding whether `cfg`
-should drive data loading is a real API question.
+### 4.2 `log_clim` doesn't select the ERA/NCEP dataset its label implies ✅ resolved
+Confirmed `cfg.log_clim` only swaps 4 hydrology regression coefficients
+(`set_hydrology_parameters!`) while `load_greb_jld2!`'s separate `dataset`
+kwarg picks the actual ERA-vs-NCEP files — the two are fully disconnected.
+Per the user's decision, kept them orthogonal (a caller can legitimately
+combine `log_clim=1` with `dataset=:era` for a sensitivity experiment) and
+just documented the relationship with cross-referencing comments on both
+(`src/config.jl`'s `log_clim` field, `src/io.jl`'s `load_greb_jld2!`
+docstring) — no behavior change.
 
 ### 4.6 More `const`-ify candidates — resolved by §1.1
 The original target (module-level globals never rebound) no longer exists:
 §1.1 moved everything into `ClimateFields`/`ModelState` struct fields, and
 Julia has no `const`-field mechanism for mutable structs. Nothing to do here.
 
-### 4.8 `forcing()`'s dispatch style is inconsistent with the rest of the codebase
+### 4.8 `forcing()`'s dispatch style is inconsistent with the rest of the codebase — flagged future improvement, kept as-is
 Its ~180-line `if/elseif` chain over `cfg.experiment` is the odd one out next
-to the Dict-based dispatch used elsewhere. A Dict-based replacement must
-preserve the chain's "missing branch = valid no-op" semantics carefully
-(per §0.6) — not a mechanical fix.
+to the Dict-based dispatch used elsewhere (`HYDRO_PARAMS`, `io.jl`'s
+`file_map`, the solar-swap table). Asked the user: explicit decision was to
+**leave it as-is for now** — zero known bugs after two Fortran-audit passes,
+and refactoring risks silently breaking the "missing branch = valid no-op"
+semantics a past bug (§0.6) taught this codebase to protect, for a
+style-only win. Recorded here as a real, not-forgotten future improvement,
+not silently closed out.
 
-### 4.9 Testing gaps — see §3's "Remaining gaps"
+### 4.9 Testing gaps — ✅ closed, see §3
 
 ### 4.10 CI has no lint/format or doc-build check
-Adding one means picking a formatting style first — a decision, not a
-mechanical addition.
+Asked the user: explicit decision was to skip this for now (checked —
+`JuliaFormatter` isn't present anywhere in the repo; adding one means
+picking a style and reformatting the whole existing codebase, bigger scope
+than a mechanical addition).
 
-### 4.11 `output.jl`'s `global_mean` is an unweighted grid mean — see §2.9
-`sum(state.Tsmn) / (xdim*ydim)` treats every grid cell as equal area; real
-cells shrink toward the poles (`cos(lat)`-weighted, same weighting already
-used for `dxlat_grid` in `constants.jl`). Changes diagnostic output numbers
-if fixed, so it needs the Fortran-comparison-plus-judgment treatment other
-`Investigated, not changed` findings got (§0's `log_eva==1` gust literal,
-`min_T_K`), not a mechanical fix.
+### 4.11 `output.jl`'s `global_mean` is an unweighted grid mean ✅ fixed
+Unlike `min_T_K`/the gust literal, this one didn't stay a judgment call —
+checked Fortran's own diagnostic directly and it settled the question.
+`greb.model.mscm.f90`'s `gmean()` (`:1497-1513`) does `sum(data*w)/sum(w)`
+with `w = cos(lat)`; Julia's `sum(state.Tsmn)/(xdim*ydim)` was a plain
+unweighted mean, diverging from Fortran, not matching it. Fixed by reusing
+the existing `dxlat_grid` (already `cos(lat)`-proportional, `constants.jl`)
+as the weight — the proportionality constant cancels in the ratio, so this
+gives an identical result to Fortran's bare `cos(lat)` weight. Diagnostic-
+only (`global_mean` is a `println` value, never stored in `MonthlyRecord`),
+so this couldn't change any returned/tested model output — confirmed by the
+golden regression test passing unchanged.
 
 ---
 
@@ -410,10 +465,12 @@ if fixed, so it needs the Fortran-comparison-plus-judgment treatment other
 4. ~~Cut `SWradiation!`'s allocation (§2.7)~~, ~~hot-loop/type-stability audit
    (§2.8)~~, ~~precomputation audit (§2.9)~~, ~~test-suite cost audit (§3)~~,
    ~~`Documenter.jl` site (§3)~~ ✅ all done.
-5. **Next up**: §1.3's remaining argument-collapsing; `qflux_correction!`'s
-   test-coverage gap (§3).
-6. The §4 findings needing domain/design input (§4.1, §4.2, §4.8, §4.10,
-   §4.11) — bring in whoever knows the intended physics/API shape.
+5. ~~`SurfaceState` struct (§1.3)~~, ~~testing gaps (§3)~~, ~~§4.1/4.2/4.11
+   resolved~~ ✅ all done. §4.8/§4.10 got an explicit user decision to defer,
+   not silently dropped.
+6. **Next up**: nothing blocking — remaining open items are §4.8 (forcing()
+   dispatch style) and §4.10 (CI lint/format), both explicitly deferred by
+   user decision rather than left unaddressed.
 
 > ⚠️ Every performance change must be validated against a reference run —
 > "faster" only counts if output is unchanged within tolerance. Every
@@ -424,6 +481,33 @@ if fixed, so it needs the Fortran-comparison-plus-judgment treatment other
 
 ## Changelog of this document
 
+- **2026-08-06 (seventh pass: `SurfaceState` struct, testing gaps, §4
+  decisions, README)**: implemented §1.3's argument-struct collapse — a
+  `SurfaceState` struct for `Ts`/`Ta`/`To`/`q`, reusing the already-existing
+  `tend` `NamedTuple`/`ws::CirculationWorkspace` for everything else instead
+  of inventing a second struct (zero new allocations). Closed all four §3
+  testing gaps: `qflux_correction!` (verified the `Ta`-correction asymmetry
+  matches Fortran exactly, not a bug), the ~20 unreachable `:experiment`
+  symbols (direct-construction sweep — caught a real footgun while writing
+  it: `forcing()` only runs during the scenario loop, so `RunSpec(scnr=0)`
+  would have made the sweep vacuous), `build_monthly_climatology`/
+  `apply_scenario_anomalies` (direct unit tests), and both JLD2 loaders'
+  untested "file present" branches (synthetic `mktempdir`+`jldopen`
+  datasets). Got the user's decisions on §4.1/4.2/4.8/4.10 and resolved
+  4.1/4.2 accordingly (removed 4 config switches with zero Fortran basis,
+  documented 3 that mirror genuinely-dead Fortran knobs; documented the
+  `log_clim`/`dataset` relationship without linking them); kept 4.8/4.10
+  deferred by explicit decision, not silently dropped. Resolved 4.11 myself
+  via direct Fortran comparison (no longer a judgment call once checked) —
+  `global_mean` now area-weights by `cos(lat)` like Fortran's own `gmean()`,
+  diagnostic-only so it can't affect any returned/tested output. Refreshed
+  `README.md`: fixed stale TOC anchors (added real `Prerequisites`/
+  `Installation` sections, renamed the second, duplicate "Quick Start" to
+  "Running the Model", added a real `Project Structure` tree), modernized
+  the "Running the Model" section to the actual plain-Julia API instead of
+  Pluto-only instructions, updated "Known Issues" with the confirmed
+  `qflux_correction!` finding, and dropped a stale `Statistics` dependency
+  row (removed as dead in an earlier pass, still listed here).
 - **2026-08-06 (sixth pass: test-suite cost audit + allocation fix + doc
   tooling)**: live-timed the full test suite (2m36.9s) and found a real,
   currently-failing assertion (`min_T_K`'s float-literal equality, fixed

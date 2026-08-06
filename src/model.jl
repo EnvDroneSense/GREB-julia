@@ -190,6 +190,12 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state
         @. ws.Ts0_buf = ws.Ts0_buf + TFc * Δt / cap_surf
 
         # ── Air temperature ──────────────────────────────────
+        # No flux-correction term here (unlike Ts/To/q below) — this is
+        # intentional, not a gap: Fortran's own qflux_correction never
+        # nudges Ta toward a climatology either (greb.model.mscm.f90:566,
+        # `Ta0 = Ta1 + dTa + dTa_crcl`), and there is no `TaF_correct`
+        # array anywhere in the Fortran source. Verified directly, not
+        # assumed — see the regression test asserting this stays true.
         @. ws.Ta0_buf = Ta + tend.dTa_crcl + ΔT_AIR_FACTOR * (
             tend.LW_up + tend.LW_down - tend.em * tend.LW_surf +
             tend.Q_lat_air - tend.Q_sens
@@ -209,8 +215,8 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state
         seaice!(ws.Ts0_buf, fields, timestate, cfg)
 
         # Diagnostics
-        diagnostics!(it, 0.0, CO2_ctrl, ws.Ts0_buf, ws.Ta0_buf, ws.To0_buf, ws.q0_buf,
-            tend.albedo, tend.SW, tend.LW_surf, tend.Q_lat, tend.Q_sens, fields, state, timestate)
+        surf = SurfaceState(ws.Ts0_buf, ws.Ta0_buf, ws.To0_buf, ws.q0_buf)
+        diagnostics!(it, 0.0, CO2_ctrl, surf, tend, fields, state, timestate)
 
         # Advance state (broadcast – same as `.=`)
         @. Ts = ws.Ts0_buf

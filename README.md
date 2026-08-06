@@ -11,8 +11,10 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 > The model code lives under `src/` (a `module GREB`, originally extracted
 > **verbatim** from the notebook and since split into topical files — see
 > `src/GREB.jl` for the include order), tests in `test/`, kernel benchmarks in
-> `benchmark/`, a plain-Julia driver in `examples/run_greb.jl`, and the original
-> interactive Pluto notebook — unchanged — in `notebooks/GREB_julia.jl`.
+> `benchmark/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+> site in `docs/`, a plain-Julia driver in `examples/run_greb.jl`, and the
+> original interactive Pluto notebook — unchanged — in `notebooks/GREB_julia.jl`.
+> See [Project Structure](#project-structure) for the full layout.
 >
 > ```julia
 > julia --project=.                 # activate the package env
@@ -62,18 +64,16 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 
 ## 🚀 Quick Start
 
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/EnvDroneSense/GREB-julia
-cd GREB_julia
-```
-
-### 2. Install Julia
+### Prerequisites
 
 Requires **Julia 1.9** or later. Download from [julialang.org](https://julialang.org/downloads/).
 
-### 3. Activate the Environment
+```bash
+git clone https://github.com/EnvDroneSense/GREB-julia
+cd GREB-julia
+```
+
+### Installation
 
 Open Julia and run:
 
@@ -90,14 +90,17 @@ This installs all dependencies from `Project.toml`:
 | `JLD2` | Reading/writing the model's `.jld2` input data |
 | `LoopVectorization` | SIMD performance |
 | `PrecompileTools` | Precompiles hot kernels at build time (faster first run) |
-| `Statistics` | Statistical functions |
 
 The Pluto notebook environment (`notebooks/`) separately depends on `PlutoUI`
 for its interactive controls. Kernel micro-benchmarks live in their own
 environment under `benchmark/` (`BenchmarkTools`) — see
-[claude/BENCHMARKS.md](claude/BENCHMARKS.md).
+[claude/BENCHMARKS.md](claude/BENCHMARKS.md). The [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+site under `docs/` has its own environment too.
 
-### 4. Launch Pluto
+### Launch Pluto (optional)
+
+The interactive notebook is one way to run the model — see
+[Running the Model](#running-the-model) below for the plain-Julia path.
 
 ```julia
 using Pluto
@@ -156,18 +159,51 @@ load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
 ```
 
 ---
-## 🎮 Quick Start
+## 🎮 Running the Model
 
 ### 1. Load Data
 
 ```julia
 jld2_dir = joinpath(@__DIR__, "greb_dataset_jld2")
-load_greb_jld2!(jld2_dir; dataset=:ncep)
+fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 ```
 
 ### 2. Configure the Experiment
 
-Use the interactive widgets in the notebook:
+```julia
+cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85, ...
+cfg.log_rain = 1                              # override any switch after construction
+```
+
+### 3. Run the Model
+
+```julia
+run = RunSpec(flux=0, ctrl=1, scnr=1)   # flux-correction, control, scenario years
+result = greb_model!(run, cfg; jld2_dir=jld2_dir, fields=fields)
+```
+
+This runs, in order: an optional flux-correction spin-up (nudges toward
+climatology), a control run at fixed CO₂, and a scenario run under
+time-varying forcing (e.g. a CO₂ ramp).
+
+### 4. Access Results
+
+```julia
+result.ctrl    # Vector{MonthlyRecord} (control)
+result.scnr    # Vector{MonthlyRecord} (scenario)
+```
+
+Each `MonthlyRecord` is a `NamedTuple` with fields:
+`Ts, Ta, To, q, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens`
+
+See the [Tutorial](https://EnvDroneSense.github.io/GREB-julia/tutorial/) or
+[`examples/run_greb.jl`](examples/run_greb.jl) for the full runnable version
+of the above, including a global-mean summary and an optional plot.
+
+### Or, interactively
+
+The Pluto notebook (`notebooks/GREB_julia.jl`) exposes the same options as
+widgets instead of code:
 
 | Control | Description |
 |:--------|:------------|
@@ -179,25 +215,8 @@ Use the interactive widgets in the notebook:
 | **Hydrology Parameters** | Rain/EVA modes, climatology dataset |
 | **Run Duration** | Flux correction, control, and scenario years |
 
-### 3. Run the Model
-
-Toggle the **Execute Model** checkbox. The model runs three phases:
-
-1. **Flux Correction** (optional) - computes correction fields to nudge toward climatology
-2. **Control Run** - steady-state at fixed CO₂
-3. **Scenario Run** - time-varying forcing (e.g., CO₂ ramp, solar changes)
-
-### 4. Access Results
-
-Results are stored in `last_run`:
-
-```julia
-ctrl = last_run.ctrl    # Vector of MonthlyRecord (control)
-scnr = last_run.scnr    # Vector of MonthlyRecord (scenario)
-```
-
-Each `MonthlyRecord` is a `NamedTuple` with fields:  
-`Ts, Ta, To, q, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens`
+Toggle the **Execute Model** checkbox to run; results land in `last_run`
+(same `.ctrl`/`.scnr` shape as above).
 
 ## 🎛️ Interactive Controls
 
@@ -212,6 +231,32 @@ Each `MonthlyRecord` is a `NamedTuple` with fields:
 | **External Forcing** | Surface temperature, Horizontal wind, Vertical velocity                    |
 | **Run Duration**     | Flux correction, Control, Scenario years (0-100 each)                      |
 | **Execute**          | Run checkbox                                                               |
+
+## 📁 Project Structure
+
+```
+GREB-julia/
+├── src/                        # the GREB package (module GREB)
+│   ├── GREB.jl                 # module shell + include order
+│   ├── constants.jl            # grid/physical constants
+│   ├── config.jl               # PhysicsConfig, RunSpec, experiment presets
+│   ├── state.jl                # ClimateFields, ModelState, workspaces
+│   ├── io.jl                   # JLD2 loaders
+│   ├── physics/                # radiation.jl, hydrology.jl, ocean.jl
+│   ├── circulation.jl          # diffusion/advection/convergence
+│   ├── tendencies.jl           # per-timestep physics pipeline, forcing()
+│   ├── output.jl               # diagnostics!/output!/time_loop!
+│   ├── postprocess.jl          # monthly climatology/anomalies
+│   └── model.jl                # init_model!/qflux_correction!/greb_model!
+├── test/runtests.jl            # unit, integration, and golden-regression tests
+├── benchmark/                  # per-kernel BenchmarkTools micro-benchmarks
+├── docs/                       # Documenter.jl site (API reference + tutorial)
+├── examples/run_greb.jl        # plain-Julia driver (no Pluto)
+├── notebooks/GREB_julia.jl     # original interactive Pluto notebook (unchanged)
+├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter
+└── claude/                     # dev notes: IMPROVEMENTS.md, BENCHMARKS.md
+```
+
 ## 🔬 Key Model Components
 
 ### Energy Balance
@@ -237,10 +282,14 @@ Each `MonthlyRecord` is a `NamedTuple` with fields:
 ---
 ## ⚠️ Known Issues
 
-The following issues are currently being worked on:
-
-### Qflux correction
-I'm in the process of debugging the qflux_correction module as I am not sure that it is fully working.
+### Qflux correction — resolved
+`qflux_correction!` now has dedicated test coverage (`test/runtests.jl`) and
+was checked directly against the Fortran reference. The one asymmetry that
+looked suspicious — `Ts`/`To`/`q` all get a climatology-forced correction
+field, but `Ta` never does — turns out to be intentional: Fortran's own
+`qflux_correction` subroutine does the identical thing (no `TaF_correct`
+array exists anywhere in the Fortran source either). See
+[`claude/IMPROVEMENTS.md`](claude/IMPROVEMENTS.md) §3 for the full writeup.
 
 ### Reporting Issues
 
@@ -261,7 +310,7 @@ Contributions to fix these issues are welcome! See [CONTRIBUTING.md](CONTRIBUTIN
 - **NetCDF output** - optional direct‑write of monthly means 
 - **Parallelisation** - multi‑threading for longer runs  
 - **Visualisation dashboard** - embedded interactive maps and time series (similar to the [interactive database](https://mscm.dkrz.de/GREB_model.html?locale=EN) )
-- **Improved documentation** - detailed physics guide and tutorial notebooks  
+- **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREB-julia/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
 
 ---
 ## 📚 References

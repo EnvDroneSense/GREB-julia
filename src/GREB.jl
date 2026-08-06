@@ -25,7 +25,7 @@ using LoopVectorization   # @turbo SIMD
 using JLD2
 
 export PhysicsConfig, RunSpec, CirculationWorkspace, MonthlyAccumulator, TimeState, MonthlyRecord
-export ClimateFields, ModelState
+export ClimateFields, ModelState, SurfaceState
 export read_jld2, load_solar_forcing_jld2, load_flux_corrections_jld2!, load_greb_jld2!
 export create_experiment_config, set_hydrology_parameters!, init_model!
 export SWradiation!, LWradiation!, hydro!, convergence!, seaice!, deep_ocean!

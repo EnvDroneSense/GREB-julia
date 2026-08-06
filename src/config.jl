@@ -12,7 +12,6 @@ Base.@kwdef mutable struct PhysicsConfig
     # Mean Climate Switches
     log_clouds_dmc::Bool = true
     log_vapor_dmc::Bool = true
-    log_ice_dmc::Bool = true
     log_crcl_dmc::Bool = true
     log_hydro_dmc::Bool = true
     log_atmos_dmc::Bool = true
@@ -22,8 +21,6 @@ Base.@kwdef mutable struct PhysicsConfig
 
     # CO₂ Response Switches
     log_clouds_drsp::Bool = true
-    log_vapor_drsp::Bool = true
-    log_ice_drsp::Bool = true
     log_crcl_drsp::Bool = true
     log_hydro_drsp::Bool = true
     log_topo_drsp::Bool = true
@@ -41,9 +38,23 @@ Base.@kwdef mutable struct PhysicsConfig
     # Hydrology Parameters
     log_rain::Int = 0
     log_eva::Int = -1
+    # Selects hydrology regression coefficients only (see
+    # set_hydrology_parameters!'s log_rain==0 NCEP-adjustment branch) — it
+    # does NOT select which climatology dataset load_greb_jld2! reads
+    # (that's its own, independent `dataset::Symbol` kwarg, :ncep/:era).
+    # The two are intentionally orthogonal (IMPROVEMENTS.md §4.2): a caller
+    # can legitimately combine log_clim=1 with dataset=:era for a
+    # sensitivity experiment. See load_greb_jld2!'s docstring (src/io.jl)
+    # for the other half of this cross-reference.
     log_clim::Int = 0
 
-    # External Forcing
+    # External Forcing — intentional no-ops (IMPROVEMENTS.md §4.1). Fortran
+    # declares and namelist-reads these three too (greb.model.mscm.f90:152-
+    # 154,242) but never actually uses them anywhere in the 1500+ line
+    # source — genuinely dead upstream, not a missing-wiring bug. Kept here
+    # (rather than removed, unlike §4.1's other 4 switches) purely for
+    # structural fidelity with the Fortran switch family; there's no real
+    # external-forcing override behind them to wire up on either side.
     log_tsurf_ext::Bool = false
     log_hwind_ext::Bool = false
     log_omega_ext::Bool = false
@@ -53,9 +64,6 @@ Base.@kwdef mutable struct PhysicsConfig
 
     # CO₂ concentration for experiments (ppm)
     co2_concentration::Float64 = 340.0
-
-    # Solar forcing multiplier
-    solar_multiplier::Float64 = 1.0
 
     # Orbital-forcing experiments: which solar_scenarios table row to load
     # (:eccentricity / :obliquity, see load_solar_forcing_jld2)
@@ -124,9 +132,11 @@ begin
             return cfg
 
         elseif experiment == :solar_plus27
-            cfg = PhysicsConfig(experiment=:solar_plus27)
-            cfg.solar_multiplier = (1365.0 + 27.0) / 1365.0
-            return cfg
+            # The actual +27 W/m² effect is computed independently in
+            # forcing() (tendencies.jl) — no cfg field needs setting here.
+            # (IMPROVEMENTS.md §4.1: a former `cfg.solar_multiplier` field
+            # duplicated this and was never read; removed.)
+            return PhysicsConfig(experiment=:solar_plus27)
 
         elseif experiment == :elnino
             cfg = PhysicsConfig(experiment=:elnino)

@@ -247,6 +247,57 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test :precip in fieldnames(MonthlyRecord)
     end
 
+    @testset "build_monthly_climatology/apply_scenario_anomalies" begin
+        # Coverage gap (IMPROVEMENTS.md §3): zero direct unit tests before —
+        # only exercised indirectly through 2 full-model-run tests. Hand-
+        # built records with every field filled to one scalar value make the
+        # averaging arithmetic trivial to check by hand.
+        mkrec(v) = (Ts=fill(v, GREB.xdim, GREB.ydim), Ta=fill(v, GREB.xdim, GREB.ydim),
+            To=fill(v, GREB.xdim, GREB.ydim), q=fill(v, GREB.xdim, GREB.ydim),
+            albedo=fill(v, GREB.xdim, GREB.ydim), ice=fill(v, GREB.xdim, GREB.ydim),
+            precip=fill(v, GREB.xdim, GREB.ydim), evap=fill(v, GREB.xdim, GREB.ydim),
+            qcrcl=fill(v, GREB.xdim, GREB.ydim), sw=fill(v, GREB.xdim, GREB.ydim),
+            lw=fill(v, GREB.xdim, GREB.ydim), qlat=fill(v, GREB.xdim, GREB.ydim),
+            qsens=fill(v, GREB.xdim, GREB.ydim))
+
+        @test build_monthly_climatology(MonthlyRecord[]) == MonthlyRecord[]
+
+        # Multi-year averaging: 2 years, record idx's value == idx. Month m
+        # sees values m (year 1) and m+12 (year 2) -> mean == m+6.
+        two_years = MonthlyRecord[mkrec(Float64(idx)) for idx in 1:24]
+        clim = build_monthly_climatology(two_years)
+        @test length(clim) == 12
+        for m in 1:12
+            @test all(==(Float64(m + 6)), clim[m].Ts)
+        end
+
+        # Non-12-multiple count: only 5 records -> months 6..12 never occur
+        # and must fall back to records[1] exactly (not e.g. NaN/zero).
+        five = MonthlyRecord[mkrec(Float64(idx)) for idx in 1:5]
+        clim5 = build_monthly_climatology(five)
+        for m in 1:5
+            @test all(==(Float64(m)), clim5[m].Ts)
+        end
+        for m in 6:12
+            @test clim5[m] == five[1]
+        end
+
+        # apply_scenario_anomalies: 2 years of scnr records (value == idx),
+        # ctrl climatology value == 100+month. Check the wraparound (idx=13
+        # is month 1, same as idx=1) subtracts the correct month's climatology.
+        ctrl_clim = MonthlyRecord[mkrec(100.0 + m) for m in 1:12]
+        scnr = MonthlyRecord[mkrec(Float64(idx)) for idx in 1:24]
+        anom = apply_scenario_anomalies(scnr, ctrl_clim)
+        @test all(==(1.0 - 101.0), anom[1].Ts)
+        @test all(==(13.0 - 101.0), anom[13].Ts)
+        @test all(==(12.0 - 112.0), anom[12].Ts)
+
+        # Early-return guards: empty scnr_records or empty ctrl_clim ->
+        # scnr_records passed straight through, not turned into anomalies.
+        @test apply_scenario_anomalies(MonthlyRecord[], ctrl_clim) == MonthlyRecord[]
+        @test apply_scenario_anomalies(scnr, MonthlyRecord[]) == scnr
+    end
+
     @testset "greb_model! runs without notebook globals" begin
         # Regression: qflux_correction!/greb_model! used to reference the Pluto
         # @bind globals `time_flux`/`jld2_dir`. They are now parameters, so the
@@ -474,6 +525,54 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) == 0
     end
 
+    @testset "qflux_correction! pulls Ts/To/q to climatology; Ta gets no correction (matches Fortran)" begin
+        # Coverage gap (IMPROVEMENTS.md §3): qflux_correction!'s loop body had
+        # zero test coverage — every other test uses time_flux=0. Use a
+        # climatology that's uniform in time (same value at every ityr) so
+        # the correction's fixed point is reached after a single timestep:
+        # algebraically, ws.Ts0_buf ends up as
+        # ws.Ts0_buf_uncorrected + (Tc - ws.Ts0_buf_uncorrected) == Tc exactly
+        # (same for To/q), so Ts/To/q should land on Tclim/Toclim/qclim, not
+        # just move closer to it.
+        fields = ClimateFields()
+        fields.cap_surf .= GREB.cap_ocean
+        for j in 1:GREB.ydim, i in 1:GREB.xdim
+            fields.Tclim[i, j, :] .= 280.0 + 5.0 * sin(i / 10.0) * cos(j / 8.0)
+            fields.Toclim[i, j, :] .= 279.0
+            fields.qclim[i, j, :] .= 0.006
+        end
+        cfg = create_experiment_config(:full_model)
+        state = ModelState()
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        Ta = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.010, GREB.xdim, GREB.ydim)
+        To = fill(285.0, GREB.xdim, GREB.ydim)
+
+        GREB.qflux_correction!(340.0, Ts, Ta, q, To, fields, state, ts, cfg, ws, 1)
+
+        @test any(!=(0.0), fields.TF_correct)
+        @test any(!=(0.0), fields.ToF_correct)
+        @test any(!=(0.0), fields.qF_correct)
+        @test all(isfinite, fields.TF_correct)
+        @test all(isfinite, fields.ToF_correct)
+        @test all(isfinite, fields.qF_correct)
+
+        @test Ts ≈ fields.Tclim[:, :, 1]
+        @test To ≈ fields.Toclim[:, :, 1]
+        @test q ≈ fields.qclim[:, :, 1]
+
+        # Ta has no corresponding correction field (fields.TaF_correct
+        # doesn't exist) — it just integrates freely, matching Fortran's own
+        # qflux_correction exactly (greb.model.mscm.f90:566). Confirm it
+        # still moved from its initial value (i.e. isn't just frozen/broken)
+        # even though nothing nudges it toward a climatology target.
+        @test all(isfinite, Ta)
+        @test Ta != fill(290.0, GREB.xdim, GREB.ydim)
+    end
+
     @testset "greb_model! swaps sw_solar for paleo experiments, restores after" begin
         # Regression: paleo/orbital experiments never actually loaded the
         # alternate solar-forcing table despite load_solar_forcing_jld2
@@ -516,6 +615,77 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
                 greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields)
             end
             @test fields.sw_solar == saved_sw_solar
+        finally
+            rm(tmpdir; recursive = true, force = true)
+        end
+    end
+
+    @testset "greb_model! reaches every :experiment symbol forcing()/init_model! dispatch on" begin
+        # Coverage gap (IMPROVEMENTS.md §3): create_experiment_config only
+        # builds presets for 9 of ~29 :experiment symbols forcing()/
+        # init_model! actually handle — the rest are reachable by
+        # constructing PhysicsConfig(experiment=:foo) directly, just not via
+        # the preset helper. forcing() only runs during the SCENARIO loop
+        # (never the control loop — see src/model.jl), so scnr=1 is required
+        # here: RunSpec(scnr=0) would make this whole sweep vacuous
+        # (forcing() never called, nothing exercised). ctrl=0 is safe and
+        # ~halves this test's runtime: compute_annual_ice_climatology on an
+        # empty ctrl_output just returns zeros (confirmed directly), which
+        # even :regional_co2_ocean/_land_ice's icmn_ctrl read tolerates fine
+        # — nothing here asserts on control-run output, only "did it run".
+        simple_symbols = (
+            :a1b_scenario, :co2_10x, :co2_half, :co2_zero, :solar_cycle_11yr,
+            :a1b_enhanced, :co2_sine_wave, :co2_step, :modern_solar_paleo_co2,
+            :earth_sun_distance, :regional_co2_nh, :regional_co2_sh,
+            :regional_co2_tropics, :regional_co2_extratropics,
+            :regional_co2_ocean, :regional_co2_land_ice, :regional_co2_winter,
+            :regional_co2_summer, :sst_plus1,
+        )
+        for sym in simple_symbols
+            cfg = PhysicsConfig(experiment = sym)
+            result = redirect_stdout(devnull) do
+                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+            end
+            @test length(result.scnr) == 12
+        end
+
+        # Genuine "not yet implemented" placeholders (forcing() error()s on
+        # these deliberately) — confirm they still throw, not that they
+        # silently no-op.
+        for sym in (:rcp26, :rcp45, :rcp60, :custom_co2)
+            cfg = PhysicsConfig(experiment = sym)
+            @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+        end
+
+        # :paleo_solar_modern_co2/:obliquity/:eccentricity swap in a real
+        # solar_scenarios/*.jld2 table at scenario start — synthesize a
+        # minimal set (same mktempdir+jldopen pattern as the paleo-swap test
+        # above) so these three are reachable without the real dataset.
+        tmpdir = mktempdir()
+        try
+            mkpath(joinpath(tmpdir, "solar_scenarios"))
+            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_paleo.jld2"), "w") do file
+                file["data"] = fill(999.0, GREB.ydim, GREB.nstep_yr)
+                file["dim_names"] = ["lat", "time"]
+            end
+            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_obliquity.jld2"), "w") do file
+                file["data"] = fill(999.0, 1, GREB.ydim, GREB.nstep_yr)
+                file["dim_names"] = ["index", "lat", "time"]
+                file["coords"] = Dict(1 => [0.0])
+            end
+            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_eccentricity.jld2"), "w") do file
+                file["data"] = fill(999.0, 1, GREB.ydim, GREB.nstep_yr)
+                file["dim_names"] = ["index", "lat", "time"]
+                file["coords"] = Dict(1 => [0.0])
+            end
+
+            for sym in (:paleo_solar_modern_co2, :obliquity, :eccentricity)
+                cfg = PhysicsConfig(experiment = sym)
+                result = redirect_stdout(devnull) do
+                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir)
+                end
+                @test length(result.scnr) == 12
+            end
         finally
             rm(tmpdir; recursive = true, force = true)
         end
@@ -628,6 +798,71 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         write(tmp, "not a jld2 file")
         @test_throws Exception read_jld2(tmp)
         rm(tmp; force = true)
+    end
+
+    @testset "load_greb_jld2!/load_flux_corrections_jld2! file-exists branches" begin
+        # Coverage gap (IMPROVEMENTS.md §3): both loaders' "file present"
+        # branches are only exercised when the real (gitignored)
+        # greb_dataset_jld2/ happens to be present locally — never on a
+        # clean checkout/CI. Synthesize a minimal dataset matching
+        # load_greb_jld2!'s exact expected layout (src/io.jl), same
+        # mktempdir+jldopen pattern as the paleo-swap test above.
+        write2(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
+            f["data"] = fill(v, GREB.xdim, GREB.ydim); f["dim_names"] = ["lon", "lat"]
+        end)
+        write3(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
+            f["data"] = fill(v, GREB.xdim, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lon", "lat", "time"]
+        end)
+        write_solar(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
+            f["data"] = fill(v, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lat", "time"]
+        end)
+
+        tmpdir = mktempdir()
+        try
+            write2(joinpath(tmpdir, "static", "global.topography.jld2"), 1.0)
+            write2(joinpath(tmpdir, "static", "greb.glaciers.jld2"), 2.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.tsurf.1948-2007.clim.jld2"), 3.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.zonal_wind.850hpa.clim.jld2"), 4.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.meridional_wind.850hpa.clim.jld2"), 5.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.atmospheric_humidity.clim.jld2"), 6.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.soil_moisture.clim.jld2"), 7.0)
+            write3(joinpath(tmpdir, "climatology", "isccp.cloud_cover.clim.jld2"), 8.0)
+            write3(joinpath(tmpdir, "climatology", "woce.ocean_mixed_layer_depth.clim.jld2"), 9.0)
+            write3(joinpath(tmpdir, "climatology", "Tocean.clim.jld2"), 10.0)
+            write3(joinpath(tmpdir, "climatology", "erainterim.omega.vertmean.clim.jld2"), 11.0)
+            write3(joinpath(tmpdir, "climatology", "erainterim.omega_std.vertmean.clim.jld2"), 12.0)
+            write3(joinpath(tmpdir, "climatology", "erainterim.windspeed.850hpa.clim.jld2"), 13.0)
+            write_solar(joinpath(tmpdir, "solar", "solar_radiation.clim.jld2"), 14.0)
+
+            # "files missing" branch: no flux-correction files present yet ->
+            # load_flux_corrections_jld2! should warn and zero-fill, not error.
+            fields_nocorr = load_greb_jld2!(tmpdir; dataset = :ncep)
+            @test all(==(0.0), fields_nocorr.TF_correct)
+            @test all(==(0.0), fields_nocorr.qF_correct)
+            @test all(==(0.0), fields_nocorr.ToF_correct)
+            @test all(==(3.0), fields_nocorr.Tclim)  # loader itself still worked
+
+            # "files present" branch: add the 3 flux-correction files and reload.
+            write3(joinpath(tmpdir, "climatology", "Tsurf_flux_correction.jld2"), 15.0)
+            write3(joinpath(tmpdir, "climatology", "vapour_flux_correction.jld2"), 16.0)
+            write3(joinpath(tmpdir, "climatology", "Tocean_flux_correction.jld2"), 17.0)
+
+            fields = load_greb_jld2!(tmpdir; dataset = :ncep)
+            @test all(==(1.0), fields.z_topo)
+            @test all(==(2.0), fields.glacier)
+            @test all(==(3.0), fields.Tclim)
+            @test all(==(4.0), fields.uclim)
+            @test all(==(14.0), fields.sw_solar)
+            @test all(==(15.0), fields.TF_correct)
+            @test all(==(16.0), fields.qF_correct)
+            @test all(==(17.0), fields.ToF_correct)
+        finally
+            rm(tmpdir; recursive = true, force = true)
+        end
+
+        missing_parent = mktempdir()
+        @test_throws ErrorException load_greb_jld2!(joinpath(missing_parent, "nonexistent"))
+        rm(missing_parent; recursive = true, force = true)
     end
 
 end
