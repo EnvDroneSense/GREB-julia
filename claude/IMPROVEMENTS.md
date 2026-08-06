@@ -12,8 +12,10 @@ buffers, flux corrections). That one design choice drove most of the
 structural *and* performance issues below — it's why the module used to eat
 ~750 MB at load, why the code was hard to thread or test, and why the same
 "config flag silently disconnected from behavior" bug shape kept recurring
-across all three bug-hunting passes. **§1.1 (the state-struct refactor) is now
-done** — see that section for what changed and how it was validated.
+across all three bug-hunting passes. **§1.1 (the state-struct refactor) is
+done** — see that section for what changed and how it was validated. §1.1
+also unblocked §2.4 (threading); §2.4 itself was attempted, benchmarked, and
+reverted — see that section for the numbers.
 
 ---
 
@@ -358,14 +360,57 @@ under `@turbo`. Now that `greb_dataset_jld2/` is available locally, this can
 be benchmarked against real data (see `benchmark/run_benchmarks.jl`) rather
 than estimated.
 
-### 2.4 Thread the spatial operators — now unlocked, still deferred
-Time-stepping is inherently sequential, but per-step spatial kernels
-(`diffusion!`, `advection!`, `SWradiation!`, `LWradiation!`, `hydro!`) are
-independent across grid columns. §1.1 landed the prerequisite (state passed
-explicitly, no shared globals to clobber across threads) — these are now
-genuinely safe to `@threads` / `@batch` (Polyester) over latitude. No
-threading is used anywhere in the module yet; this is the natural next
-performance step, and unlike before it's no longer blocked on anything else.
+### 2.4 Thread the spatial operators — tried, measured, reverted
+Implemented `Threads.@threads :static for k in 1:ydim` on `diffusion!`'s and
+`advection!'s` outer latitude-row loop (`src/circulation.jl`) — each row
+writes a disjoint output column from read-only input, genuinely
+embarrassingly parallel in principle. One real race had to be fixed first:
+both functions' polar sub-stepping branches reused a single shared scratch
+vector (`ws.T1h`), read-modify-written across several `k` rows near each
+pole; fixed with a per-thread `T1h_threads::Matrix{Float64}` column, sized by
+`Threads.maxthreadid()` (not `Threads.nthreads()` — Julia 1.9+'s
+default+interactive threadpool split means `threadid()` values inside a
+`:static` `@threads` loop can exceed `nthreads()`; sizing by `nthreads()`
+produced a real `BoundsError` on the first `-t 4` run, caught before it went
+further). Validated bit-identical (not just within tolerance) across thread
+counts via a dedicated subprocess-based test — confirmed no race remained.
+
+**Benchmarked, and reverted** — the grid is too small (`xdim=96, ydim=48`,
+~1µs of actual work per row) for `Threads.@threads`'s per-call scheduling
+overhead to pay off at any thread count tried:
+
+| kernel | `-t 1` (before → after) | `-t auto`/14 threads (before → after) |
+|---|---|---|
+| `diffusion!` | 45–117µs, 0 allocs → 54µs, **7 allocs** | → **220µs, 72 allocs (4x slower)** |
+| `advection!` | 23–74µs, 0 allocs → 68µs, **7 allocs** | → **206µs, 72 allocs (3x slower)** |
+| `circulation!` | 1.9ms, 0 allocs → 1.9ms, **336 allocs** | → **10.9ms, 3456 allocs (5.7x slower)** |
+| `tendencies!` | 4.2ms, 48 allocs → 4.2ms, **720 allocs** | → **23.7ms, 6960 allocs (5.6x slower)** |
+
+Full numbers in `claude/BENCHMARKS.md`'s "-t 1"/"-t auto" entries for this
+pass. Even at `-t 1`, `Threads.@threads` itself allocates (task/partition
+bookkeeping) even with nothing to parallelize across — a real, if small,
+regression. At `-t auto`, `circulation!`'s `ntime`-iteration sub-step loop
+calls `diffusion!`/`advection!` repeatedly, so the per-call threading
+overhead compounds every sub-step: 5–6x slower end-to-end, not a marginal
+loss. The plan going into this explicitly flagged threading overhead as
+possibly not paying off at this grid size and included a benchmark gate for
+exactly this reason — the numbers came back unambiguously negative, and
+unlike the plan's anticipated fallback (gate `@threads` behind
+`nthreads() > 1`), that wouldn't actually help here: `nthreads() > 1` is
+precisely the regime that's *worse*, not better. Reverted `diffusion!`/
+`advection!` to their original plain `for k in 1:ydim` loops; `ws.T1h`
+reverted to a single `Vector{Float64}` (no per-thread buffer needed without
+threading). Kept the unrelated find made along the way: `CirculationWorkspace`'s
+`dTxh` field was dead code (zero reads/writes anywhere in `src/`) and stayed
+removed.
+
+**Takeaway for any future threading attempt**: this grid (96×48) and these
+kernels' per-row cost (~1µs) are the wrong shape for `Threads.@threads`.
+A lower-overhead approach (e.g. `Polyester.@batch`, which avoids the
+task-scheduling machinery `Threads.@threads` uses) might fare better, or
+threading might only pay off on a substantially larger grid. Don't re-attempt
+with plain `Threads.@threads` at this resolution without a reason to expect
+a different result.
 
 ### 2.5 ~~Cut per-call allocations in `forcing`~~ ✅ done
 `forcing`'s `icmn_ctrl` is a required argument (`src/tendencies.jl`); the
@@ -397,15 +442,29 @@ that cost is paid once (or in CI) rather than by every user's first call.
 ## 3. Testing, tooling & reproducibility
 
 - **Reference/regression tests**: `test/runtests.jl` now includes
-  branch-coverage loops over `log_eva ∈ {-1,0,1}` × `log_rain ∈ {-1,0,1,2,3}`
-  (added specifically because §0.1 hid in an untested branch) and a direct
-  unit test asserting `set_hydrology_parameters!` writes the right values
-  into `cfg` for every `log_rain`/`log_clim` combination (added because of
-  §0.2/§0.3). Still no golden/snapshot test against real numeric output —
-  now that `greb_dataset_jld2/` is available locally (gitignored, not
-  committed), a short real control run could be snapshotted and diffed with a
-  tolerance. Not done this pass — deferred alongside §1.1, since that's when
-  numeric-output validation becomes essential anyway.
+  branch-coverage loops over `log_eva`/`log_rain` (added specifically because
+  §0.1 hid in an untested branch) and a direct unit test asserting
+  `set_hydrology_parameters!` writes the right values into `cfg` for every
+  `log_rain`/`log_clim` combination (added because of §0.2/§0.3).
+- **Golden/snapshot regression test** ✅ done: a real 1yr control + 1yr
+  scenario `:full_model` run against `greb_dataset_jld2/`, snapshotting
+  monthly global-mean `Ts`/`Ta`/`q` and asserting they match reference values
+  within `atol=1e-6` — well above the ~1e-12 float-reassociation noise §1.1
+  already measured, tight enough to catch a real regression. Skips (via
+  `@test_skip`) when the dataset isn't present. Added as an end-to-end
+  tripwire before attempting §2.4's threading change; kept afterward as a
+  general-purpose regression test for any future kernel change.
+- **Test-suite runtime**: the `log_eva`/`log_rain` branch-coverage sweep used
+  to run a full `greb_model!` year for every one of the 4×5=20 combinations,
+  ~65% of all simulated model-years in the suite, for no extra bug-catching
+  power — `log_eva` and `log_rain` gate independent branches of `hydro!`, so
+  the cross product exercises no interaction the two axes don't already cover
+  separately. Changed to a zipped sweep (cycling the shorter list): 5 runs
+  instead of 20, still hitting every value of both axes at least once — same
+  regression-catching guarantee, 75% less work. Also dropped a redundant full
+  `greb_model!` call from the thread-equivalence test's subprocess worker
+  (added, then found unnecessary, in the same pass) — the `diffusion!`/
+  `advection!` bit-identity check alone already covers the actual race risk.
 - **Per-kernel unit tests**: not added as `Test.jl` unit tests, but
   `benchmark/run_benchmarks.jl` now exercises every hot kernel individually
   with synthetic inputs (see below) — a natural base to extend with
@@ -484,22 +543,26 @@ never connected to `cfg` at all. Fixing this properly means deciding whether
 Fixed as §0.7 — modes `1`/`2` now implement Fortran's actual distinct
 formulas instead of duplicating mode `-1`.
 
-### 4.4 `forcing()` per-timestep overhead
-`forcing()` (`src/tendencies.jl`) has no `:full_model` branch (the default,
-most common experiment), so every timestep in the scenario loop falls through
-the entire ~25-branch chain, including `startswith(string(cfg.experiment),
-"regional_co2_")`, which allocates a new `String` on every call regardless of
-match. Additionally, the regional-CO2 mask (`co2_part`) is fully recomputed
-every timestep even though it depends only on static topography and never
-changes within a run — easy to hoist to a one-time setup once §1.1 gives
-`init_model!` a natural place to precompute it.
+### 4.4 `forcing()` per-timestep overhead — partially fixed ✅
+`forcing()` (`src/tendencies.jl`) now short-circuits with an early
+`if cfg.experiment == :full_model; return (...); end` before the `elseif`
+chain, avoiding the allocating `startswith(string(cfg.experiment),
+"regional_co2_")` check on every timestep of the default, most common
+experiment. Pure short-circuit — returns exactly what the old fallthrough
+already computed for `:full_model`, verified no branch sets anything for it.
 
-### 4.5 `hydro!` recomputes per-call "constants" as locals
-`const_factor1`, `const_factor2/3`, `gust_land/ocean`, `cE_land/ocean`,
-`const_latent` (`src/physics/hydrology.jl`) are plain local variables
-recomputed every timestep, inconsistent with `src/constants.jl`'s pattern of
-precomputing everything else once at module load. Cheap individually, adds up
-across tens of thousands of timesteps; low priority.
+Still deferred: the regional-CO2 mask (`co2_part`) is still fully recomputed
+every timestep inside the `regional_co2_*` branches even though it depends
+only on static topography — hoisting that needs a new init-time hook and
+only benefits those niche experiments, not the default path this fix
+targeted.
+
+### 4.5 `hydro!` recomputes per-call "constants" as locals ✅ done
+`const_factor1/2/3`, `gust_land/ocean`, `cE_land/ocean`, `const_latent`
+(`src/physics/hydrology.jl`) are now module-level `const`s
+(`_HYDRO_CONST_FACTOR1`, etc.), computed once instead of as local variables
+recomputed every timestep. Zero behavior change — same values, same source
+constants (`ce`, `cq_latent`, `ρ_air`).
 
 ### 4.6 More `const`-ify candidates
 Beyond the constants already made `const` (§2.1), several module globals are
@@ -510,15 +573,15 @@ qlatmn, qsensmn, ftmn, fqmn`, `src/state.jl`) plus climatology fields like
 (Julia errors immediately if a hidden rebind exists) but spans many locations
 — deserves its own dedicated, careful pass rather than a piecemeal one.
 
-### 4.7 Missing docstrings on the public API
-Beyond the 3 fixed in §3, ~20 more exported functions/types have no
-docstring at all — including `greb_model!` itself, the package's main entry
-point (its `(time_flux, time_ctrl, time_scnr, cfg)` argument order is only
-explained by one README usage line). Also: `SWradiation!`, `LWradiation!`,
-`hydro!`, `seaice!`, `deep_ocean!`, `diffusion!`, `advection!`, `circulation!`,
-`tendencies!`, `forcing`, `diagnostics!`, `output!`, `time_loop!`, `init_model!`,
-`qflux_correction!`, `build_monthly_climatology`, `apply_scenario_anomalies`,
-`compute_annual_ice_climatology`, `PhysicsConfig`, `TimeState`, `MonthlyRecord`.
+### 4.7 Missing docstrings on the public API ✅ done
+All ~22 exported functions/types that had no docstring now do: `SWradiation!`,
+`LWradiation!`, `hydro!`, `seaice!`, `deep_ocean!`, `diffusion!`, `advection!`,
+`circulation!`, `tendencies!`, `forcing`, `diagnostics!`, `output!`,
+`time_loop!`, `init_model!`, `qflux_correction!`, `build_monthly_climatology`,
+`apply_scenario_anomalies`, `compute_annual_ice_climatology`, `PhysicsConfig`,
+`TimeState`, `MonthlyRecord`, `load_solar_forcing_jld2`. `greb_model!` itself
+already had one from §1.1. Mechanical — brief description + argument/return
+notes, following the existing `convergence!`-style format, no behavior change.
 
 ### 4.8 `forcing()`'s dispatch style is inconsistent with the rest of the codebase
 Its ~183-line/~25-branch `if/elseif` chain over `cfg.experiment`
@@ -575,11 +638,21 @@ picking a formatting style first — a decision, not a mechanical addition.
    change), and incidentally fixed §2.2 (lazy allocation) and unlocked §2.4
    (threading) as a side effect. §1.3/§1.4 (argument-list/`RunSpec` collapsing)
    remain deferred — real but smaller wins than §1.1 was.
-5. **Next up**: threading the spatial operators (§2.4, now unblocked),
-   `Float32`/allocation audit (§2.3, §2.5's `diffusion!`/`advection!`/
-   `circulation!` allocations — worth re-measuring now that §1.1 changed
-   codegen), §1.3/§1.4's remaining argument-collapsing.
-6. The §4 findings that need domain/design input before they can even be
+5. Threading the spatial operators (§2.4) — **attempted, benchmarked, reverted**.
+   `Threads.@threads` on `diffusion!`/`advection!` was 3-6x *slower* at
+   `-t auto` (grid too small, per-row work too cheap for the scheduling
+   overhead) and even added allocations at `-t 1`. Validated the
+   implementation was race-free (bit-identical across thread counts) before
+   the benchmarks made clear it wasn't worth keeping. Picked up several other
+   low-risk §4 items in the same pass instead: `forcing()`'s `:full_model`
+   fast path (§4.4), `hydro!`'s constant hoist (§4.5), missing docstrings
+   (§4.7), and a golden/snapshot regression test (§3).
+6. **Next up**: `Float32`/allocation audit (§2.3, §2.5's `diffusion!`/
+   `advection!`/`circulation!` allocations — worth re-measuring now that §1.1
+   changed codegen), §1.3/§1.4's remaining argument-collapsing. If threading
+   is revisited, §2.4 now has a documented reason to try `Polyester.@batch`
+   instead of `Threads.@threads`, not just retry the same approach.
+7. The §4 findings that need domain/design input before they can even be
    scoped as mechanical work (§4.1's remaining unwired switches, §4.2
    `log_clim`/dataset split, §4.8 `forcing()` dispatch) — bring in whoever
    knows the intended physics/API shape.
@@ -593,6 +666,26 @@ picking a formatting style first — a decision, not a mechanical addition.
 
 ## Changelog of this document
 
+- **2026-08-06 (threading attempt + low-risk cleanup)**: The user asked to
+  plan and implement threading (§2.4, unblocked by §1.1) plus some of this
+  doc's other low-risk items, keeping this doc current as work landed.
+  Added a golden/snapshot regression test against real data (§3) as a
+  tripwire, then threaded `diffusion!`/`advection!` over latitude rows
+  (`Threads.@threads :static`); found and fixed a real race in the process
+  (`ws.T1h`'s shared polar scratch buffer needed a per-thread copy) plus a
+  sizing gotcha (`Threads.threadid()` can exceed `Threads.nthreads()` — must
+  size by `maxthreadid()`), and validated bit-identical output across thread
+  counts. The benchmark gate the plan called for then showed the threading
+  itself was a net loss — 3-6x *slower* at `-t auto` (14 threads), plus new
+  allocations even at `-t 1` — so it was reverted; §2.4 now documents the
+  actual numbers and why a plain `Threads.@threads` retry isn't worth it at
+  this grid size. Also implemented §4.4's `:full_model` fast path, §4.5's
+  `hydro!` constant hoist, and §4.7's missing docstrings (~22 exports).
+  Separately, investigated and cut the test suite's own runtime: the
+  `log_eva`/`log_rain` branch-coverage sweep ran a full model-year for all 20
+  cross-product combinations for no extra coverage (the two switches gate
+  independent branches) — reduced to 5 zipped runs covering every value of
+  both axes. Updated §2.4/§4.4/§4.5/§4.7/§3/§5 to reflect all of the above.
 - **2026-08-06 (third pass + state-struct refactor)**: The user asked for a
   direct line-by-line comparison against the original Fortran reference
   (`greb.model.mscm.f90`) to confirm no conceptual drift, then to plan and

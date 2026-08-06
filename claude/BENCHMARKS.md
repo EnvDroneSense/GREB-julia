@@ -67,3 +67,45 @@ Reproduce: `julia --project=benchmark benchmark/run_benchmarks.jl "<tag>"`
 | `circulation!` | 1.791 ms | 1.922 ms | 0 bytes | 0 |
 | `tendencies!` | 3.689 ms | 4.247 ms | 38.25 KiB | 48 |
 
+---
+
+## 2026-08-06 11:42 — threading (diffusion!/advection!) -t 1, pre-existing baseline for comparison
+
+- branch: `improvements`  commit: `d169451` (dirty working tree)
+- data: real `greb_dataset_jld2/` (NCEP)
+- julia: `1.12.6`
+
+| kernel | min | median | memory | allocs |
+|---|---|---|---|---|
+| `convergence!` | 1.240 μs | 1.310 μs | 0 bytes | 0 |
+| `diffusion!` | 47.800 μs | 54.400 μs | 512 bytes | 7 |
+| `advection!` | 21.700 μs | 68.000 μs | 672 bytes | 7 |
+| `SWradiation!` | 16.100 μs | 21.400 μs | 38.25 KiB | 48 |
+| `LWradiation!` | 188.600 μs | 205.400 μs | 0 bytes | 0 |
+| `hydro!` | 25.600 μs | 26.900 μs | 0 bytes | 0 |
+| `seaice!` | 4.867 μs | 5.050 μs | 0 bytes | 0 |
+| `deep_ocean!` | 7.250 μs | 7.575 μs | 0 bytes | 0 |
+| `circulation!` | 1.753 ms | 1.893 ms | 27.75 KiB | 336 |
+| `tendencies!` | 3.788 ms | 4.223 ms | 93.75 KiB | 720 |
+
+---
+
+## 2026-08-06 11:43 — threading (diffusion!/advection!) -t auto (14 logical CPUs)
+
+- branch: `improvements`  commit: `d169451` (dirty working tree)
+- data: real `greb_dataset_jld2/` (NCEP)
+- julia: `1.12.6`
+
+| kernel | min | median | memory | allocs |
+|---|---|---|---|---|
+| `convergence!` | 1.170 μs | 1.240 μs | 0 bytes | 0 |
+| `diffusion!` | 140.600 μs | 220.000 μs | 6.30 KiB | 72 |
+| `advection!` | 132.100 μs | 205.900 μs | 8.48 KiB | 72 |
+| `SWradiation!` | 16.000 μs | 18.400 μs | 38.25 KiB | 48 |
+| `LWradiation!` | 158.300 μs | 174.000 μs | 0 bytes | 0 |
+| `hydro!` | 25.600 μs | 26.800 μs | 0 bytes | 0 |
+| `seaice!` | 4.886 μs | 5.000 μs | 0 bytes | 0 |
+| `deep_ocean!` | 7.800 μs | 8.150 μs | 0 bytes | 0 |
+| `circulation!` | 8.443 ms | 10.871 ms | 354.75 KiB | 3456 |
+| `tendencies!` | 17.791 ms | 23.703 ms | 747.75 KiB | 6960 |
+
