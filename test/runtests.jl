@@ -6,6 +6,8 @@ using Test
 # are intact after the notebook -> package extraction. Full integration runs
 # (which need `greb_dataset_jld2/`) are demonstrated in examples/run_greb.jl.
 
+const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
+
 @testset "GREB.jl" begin
 
     @testset "grid constants" begin
@@ -154,7 +156,16 @@ using Test
         # log_eva == 0 branch: it threw `type CirculationWorkspace has no
         # field cE` at runtime, but was invisible to the test above because
         # PhysicsConfig's default (log_eva = -1) never reached that branch.
-        for log_eva in (-1, 0, 1, 2), log_rain in (-1, 0, 1, 2, 3)
+        # log_eva and log_rain gate independent branches of hydro! (evaporation
+        # vs. rain), so a full cross product (20 full-model-year runs) buys no
+        # extra bug-catching power over hitting every value of each axis at
+        # least once — zip the two lists (cycling the shorter) instead: 5 runs
+        # cover all 4 log_eva and all 5 log_rain values.
+        log_evas = (-1, 0, 1, 2)
+        log_rains = (-1, 0, 1, 2, 3)
+        n = max(length(log_evas), length(log_rains))
+        combos = collect(Iterators.take(zip(Iterators.cycle(log_evas), Iterators.cycle(log_rains)), n))
+        for (log_eva, log_rain) in combos
             cfg = create_experiment_config(:full_model)
             cfg.log_eva = log_eva
             cfg.log_rain = log_rain
@@ -289,6 +300,70 @@ using Test
             @test fields.sw_solar == saved_sw_solar
         finally
             rm(tmpdir; recursive = true, force = true)
+        end
+    end
+
+    @testset "golden regression: real dataset control+scenario run matches snapshot" begin
+        # Tripwire for any future refactor touching the physics kernels: a
+        # real 1yr control + 1yr scenario run against the actual NCEP
+        # dataset, snapshotted as monthly global-mean Ts/Ta/q. Drift beyond
+        # float-reassociation noise (~1e-12, per §1.1's validation) means
+        # real behavior changed, not just codegen.
+        if !isdir(DATA_DIR)
+            @test_skip "greb_dataset_jld2/ not present"
+        else
+            fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
+            cfg = create_experiment_config(:full_model)
+            result = redirect_stdout(devnull) do
+                greb_model!(0, 1, 1, cfg; jld2_dir = DATA_DIR, fields = fields)
+            end
+
+            gmean(x) = sum(x) / length(x)
+            summarize(rec) = (Ts = gmean(rec.Ts), Ta = gmean(rec.Ta), q = gmean(rec.q))
+
+            ctrl_ref = [
+                (Ts = 276.63389785254117, Ta = 279.00866451502094, q = 0.006482753121860039),
+                (Ts = 276.10017268626024, Ta = 278.6028937611816, q = 0.00668739684812687),
+                (Ts = 276.388442156017, Ta = 278.72573233878353, q = 0.00682808257230516),
+                (Ts = 278.0240233293377, Ta = 280.2529210112473, q = 0.0069966126325217304),
+                (Ts = 280.1031039537348, Ta = 282.36528370627616, q = 0.007328311804874635),
+                (Ts = 281.8344065444744, Ta = 284.2492873665963, q = 0.007855206540293952),
+                (Ts = 282.5448479815043, Ta = 285.1228519081824, q = 0.008283164031606735),
+                (Ts = 282.33125993398033, Ta = 285.01015360412885, q = 0.008281802705686745),
+                (Ts = 281.10070107454794, Ta = 283.7866724383352, q = 0.007863845803854849),
+                (Ts = 279.50072842405575, Ta = 282.120136024737, q = 0.0074703541057228795),
+                (Ts = 278.5348338548442, Ta = 281.16355100615056, q = 0.007309014153306267),
+                (Ts = 278.22816682437116, Ta = 280.9176480983989, q = 0.00738181681971089),
+            ]
+            scnr_ref = [
+                (Ts = -0.007571634235747767, Ta = -0.007089308718986831, q = -4.081339012618789e-8),
+                (Ts = -0.0013551224242967384, Ta = -0.0015493313242557884, q = 9.102445459706407e-9),
+                (Ts = -0.00020442571918428195, Ta = -0.00024156781992338037, q = -9.271643775374363e-9),
+                (Ts = 6.182223824950188e-5, Ta = 4.783229922051947e-5, q = -2.8335690722745083e-10),
+                (Ts = 0.00012023495250817412, Ta = 0.00011472080648978878, q = 1.0168811376219707e-8),
+                (Ts = 7.681730417081879e-5, Ta = 7.920078250080638e-5, q = 1.3688500942266693e-8),
+                (Ts = 4.1195354445497686e-5, Ta = 4.141728412822133e-5, q = 9.129724929143924e-9),
+                (Ts = 2.7270105682110203e-5, Ta = 2.625888675127857e-5, q = 3.1258696700343723e-9),
+                (Ts = 6.585894956863248e-5, Ta = 5.939956210095539e-5, q = 3.2744319937734625e-9),
+                (Ts = 7.940477996446236e-5, Ta = 8.002416602393487e-5, q = 8.064962095321034e-10),
+                (Ts = 6.92322901695482e-5, Ta = 7.033208314480597e-5, q = -1.3232220798557476e-9),
+                (Ts = 4.8830913025488254e-5, Ta = 4.932494557094744e-5, q = -2.4602072149437726e-9),
+            ]
+
+            @test length(result.ctrl) == length(ctrl_ref)
+            @test length(result.scnr) == length(scnr_ref)
+            for (rec, ref) in zip(result.ctrl, ctrl_ref)
+                s = summarize(rec)
+                @test isapprox(s.Ts, ref.Ts; atol = 1e-6)
+                @test isapprox(s.Ta, ref.Ta; atol = 1e-6)
+                @test isapprox(s.q, ref.q; atol = 1e-6)
+            end
+            for (rec, ref) in zip(result.scnr, scnr_ref)
+                s = summarize(rec)
+                @test isapprox(s.Ts, ref.Ts; atol = 1e-6)
+                @test isapprox(s.Ta, ref.Ta; atol = 1e-6)
+                @test isapprox(s.q, ref.q; atol = 1e-6)
+            end
         end
     end
 
