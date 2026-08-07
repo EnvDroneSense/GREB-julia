@@ -9,11 +9,11 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 ---
 > **Repository layout (v0.1):** GREB is now organized as a standard Julia package.
 > The model code lives under `src/` (a `module GREB`, originally extracted
-> **verbatim** from the notebook and since split into topical files — see
+> **verbatim** from the notebook and since split into topical files - see
 > `src/GREB.jl` for the include order), tests in `test/`, kernel benchmarks in
 > `benchmark/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
 > site in `docs/`, a plain-Julia driver in `examples/run_greb.jl`, and the
-> original interactive Pluto notebook — unchanged — in `notebooks/GREB_julia.jl`.
+> original interactive Pluto notebook - unchanged - in `notebooks/GREB_julia.jl`.
 > See [Project Structure](#project-structure) for the full layout.
 >
 > ```julia
@@ -93,13 +93,13 @@ This installs all dependencies from `Project.toml`:
 
 The Pluto notebook environment (`notebooks/`) separately depends on `PlutoUI`
 for its interactive controls. Kernel micro-benchmarks live in their own
-environment under `benchmark/` (`BenchmarkTools`) — see
+environment under `benchmark/` (`BenchmarkTools`) - see
 [claude/BENCHMARKS.md](claude/BENCHMARKS.md). The [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
 site under `docs/` has its own environment too.
 
 ### Launch Pluto (optional)
 
-The interactive notebook is one way to run the model — see
+The interactive notebook is one way to run the model - see
 [Running the Model](#running-the-model) below for the plain-Julia path.
 
 ```julia
@@ -111,7 +111,7 @@ Open `GREB_julia.jl` from the Pluto interface.
 
 ## 📂 Input Data
 
-The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) — a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text).
+The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) - a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text).
 
 In the original model these were all separate `.bin` files. `scripts/convert_greb_to_jld2.jl` converts the raw GREB `.bin` input files (see [DATA_README.md](DATA_README.md) for their expected layout, normally under `Data/input/`) into this `.jld2` layout:
 
@@ -282,11 +282,11 @@ GREB-julia/
 ---
 ## ⚠️ Known Issues
 
-### Qflux correction — resolved
+### Qflux correction - resolved
 `qflux_correction!` now has dedicated test coverage (`test/runtests.jl`) and
 was checked directly against the Fortran reference. The one asymmetry that
-looked suspicious — `Ts`/`To`/`q` all get a climatology-forced correction
-field, but `Ta` never does — turns out to be intentional: Fortran's own
+looked suspicious - `Ts`/`To`/`q` all get a climatology-forced correction
+field, but `Ta` never does - turns out to be intentional: Fortran's own
 `qflux_correction` subroutine does the identical thing (no `TaF_correct`
 array exists anywhere in the Fortran source either). See
 [`claude/IMPROVEMENTS.md`](claude/IMPROVEMENTS.md) §3 for the full writeup.
@@ -311,6 +311,7 @@ Contributions to fix these issues are welcome! See [CONTRIBUTING.md](CONTRIBUTIN
 - **Parallelisation** - multi‑threading for longer runs  
 - **Visualisation dashboard** - embedded interactive maps and time series (similar to the [interactive database](https://mscm.dkrz.de/GREB_model.html?locale=EN) )
 - **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREB-julia/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
+- **Package registration** - formally register GREB.jl with the Julia General Registry for easy installation
 
 ---
 ## 📚 References
