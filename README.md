@@ -1,6 +1,6 @@
 # GREB Climate Model - Julia Implementation
 
-[![Julia](https://img.shields.io/badge/Julia-1.9+-9558B2?logo=julia)](https://julialang.org/)
+[![Julia](https://img.shields.io/badge/Julia-1.10+-9558B2?logo=julia)](https://julialang.org/)
 [![Pluto](https://img.shields.io/badge/Pluto-Interactive-purple)](https://github.com/fonsp/Pluto.jl)
 [![docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://EnvDroneSense.github.io/GREB-julia/)
 
@@ -65,7 +65,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 
 ### Prerequisites
 
-Requires **Julia 1.9** or later. Download from [julialang.org](https://julialang.org/downloads/).
+Requires **Julia 1.10** (the current LTS) or later. Download from [julialang.org](https://julialang.org/downloads/).
 
 ```bash
 git clone https://github.com/EnvDroneSense/GREB-julia
