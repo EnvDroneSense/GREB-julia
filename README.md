@@ -58,7 +58,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 - ⏱️ 12-hour main time steps with 30-minute sub-steps for circulation
 - 📊 Real-time visualization of climate variables
 - 🔬 Support for multiple climate datasets (NCEP, ERA-Interim)
-- 🌡️ Future climate scenarios (RCP 2.6/4.5/6.0/8.5; SSP1-1.9/1-2.6/2-4.5/4-6.0/5-8.5 — RCP8.5 and the five SSPs are implemented, the other RCPs remain "not yet implemented" placeholders)
+- 🌡️ Future climate scenarios (RCP 2.6/4.5/6.0/8.5; SSP1-1.9/1-2.6/2-4.5/4-6.0/5-8.5 - RCP8.5 and the five SSPs are implemented, the other RCPs remain "not yet implemented" placeholders) and a historical CO2 (1850–2017) hindcast (`:historical_co2`)
 - ☀️ Orbital forcing and paleoclimate experiments
 
 ## 🚀 Quick Start
@@ -138,7 +138,7 @@ greb_dataset_jld2/
 │   ├── erainterim.omega.vertmean.clim.jld2
 │   ├── erainterim.omega_std.vertmean.clim.jld2
 │   ├── erainterim.windspeed.850hpa.clim.jld2
-│   └── [flux_correction files]
+│   └── flux_corrections.jld2       # Tsurf/vapour/Tocean flux corrections, combined (always loaded together)
 ├── solar/
 │   └── solar_radiation.clim.jld2   # 2D (48×730)
 ├── solar_scenarios/                # Optional
@@ -146,7 +146,9 @@ greb_dataset_jld2/
 │   ├── solar_eccentricity.jld2    # (ecc_index, lat, time), coords[1] = actual eccentricity values
 │   └── solar_obliquity.jld2       # (obl_index, lat, time), coords[1] = actual obliquity angles
 └── scenario/                        # Optional
-    └── ipcc_scenarios.jld2   # Dict{String,Dict{Int,Float64}}, keyed "rcp85"/"ssp585"/"hist"/...
+    ├── ipcc_scenarios.jld2        # Dict{String,Dict{Int,Float64}}, keyed "rcp85"/"ssp585"/"hist"/...
+    │                              # ("hist" backs :historical_co2, which starts at year 1850 not 1950)
+    └── historical_emissions_population.jld2   # year => (co2_emissions_gt_co2_yr, population_billions)
 ```
 
 ### Loading Data
@@ -170,7 +172,7 @@ fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 ### 2. Configure the Experiment
 
 ```julia
-cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85, :ssp585, ...
+cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85, :ssp585, :historical_co2, ...
 cfg.log_rain = 1                              # override any switch after construction
 ```
 

@@ -60,8 +60,8 @@ end
 Returns `(CO2, sw_solar_forcing)` for the current timestep, computed
 according to `cfg.experiment`. Some experiments (the `regional_co2_*` family)
 also mutate `fields.co2_part` as a side effect. `:full_model` short-circuits
-before the experiment dispatch chain. The `:ssp*` experiments look `year`
-up in `cfg.co2_scenario`.
+before the experiment dispatch chain. The `:ssp*`/`:historical_co2`
+experiments look `year` up in `cfg.co2_scenario`.
 """
 function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
@@ -171,8 +171,8 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     elseif cfg.experiment == :custom_co2
         error("Custom CO₂ scenario requires external trajectory file. Not yet implemented.")
 
-    # - IPCC SSP scenarios — CO₂ read from a per-year lookup table ──────────
-    elseif cfg.experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+    # - IPCC SSP/historical scenarios — CO₂ read from a per-year lookup table ─
+    elseif cfg.experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
         yr = round(Int, year)
         haskey(cfg.co2_scenario, yr) ||
             error("No CO2 data for year $yr in $(cfg.experiment) scenario table " *

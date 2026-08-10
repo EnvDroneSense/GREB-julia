@@ -98,6 +98,7 @@ begin
     - `:paleo_231kyr` - Paleoclimate (200 ppm CO₂)
     - `:rcp85` - RCP8.5 climate change scenario
     - `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`
+    - `:historical_co2` - Observed CO₂ 1850–2017 (year starts at 1850, not 1950)
     """
     function create_experiment_config(experiment::Symbol)::PhysicsConfig
         if experiment == :full_model
@@ -143,6 +144,10 @@ begin
 
         elseif experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
             cfg = PhysicsConfig(experiment=experiment)
+            return cfg
+
+        elseif experiment == :historical_co2
+            cfg = PhysicsConfig(experiment=:historical_co2)
             return cfg
 
         else

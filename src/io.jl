@@ -77,24 +77,37 @@ function load_co2_scenario_jld2(jld2_dir::String, scenario::Symbol)
     return scenarios[key]
 end
 
-"""Load flux corrections from JLD2 files into `fields` (zeros if missing)"""
+"""
+Load flux corrections from the combined `climatology/flux_corrections.jld2`
+into `fields` (zeros per-field if the file or an individual key is missing).
+All three fields are always loaded together — measured ~35% faster than 3
+separate files with no size penalty, see `claude/IMPROVEMENTS.md` §3.
+"""
 function load_flux_corrections_jld2!(jld2_dir::String, fields::ClimateFields)
-    correction_files = Dict(
-        "Tsurf_flux_correction.jld2" => fields.TF_correct,
-        "vapour_flux_correction.jld2" => fields.qF_correct,
-        "Tocean_flux_correction.jld2" => fields.ToF_correct
+    correction_keys = Dict(
+        "Tsurf_flux_correction" => fields.TF_correct,
+        "vapour_flux_correction" => fields.qF_correct,
+        "Tocean_flux_correction" => fields.ToF_correct
     )
 
-    for (filename, array) in correction_files
-        filepath = joinpath(jld2_dir, "climatology", filename)
-        if isfile(filepath)
-            result = read_jld2(filepath)
-            array .= result.data
-            println("✅ Loaded $filename")
-        else
-            fill!(array, 0.0)
-            @warn "$filename not found, using zeros"
+    filepath = joinpath(jld2_dir, "climatology", "flux_corrections.jld2")
+    if isfile(filepath)
+        jldopen(filepath, "r") do file
+            for (key, array) in correction_keys
+                if haskey(file, key)
+                    array .= file[key]
+                    println("✅ Loaded $key")
+                else
+                    fill!(array, 0.0)
+                    @warn "$key not found in $filepath, using zeros"
+                end
+            end
         end
+    else
+        for array in values(correction_keys)
+            fill!(array, 0.0)
+        end
+        @warn "$filepath not found, using zeros for all flux corrections"
     end
 end
 

@@ -21,7 +21,8 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test cfg isa PhysicsConfig
 
         for exp in (:full_model, :constant_topo, :co2_double, :co2_quadruple,
-                    :elnino, :lanina, :rcp85, :ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+                    :elnino, :lanina, :rcp85, :ssp119, :ssp126, :ssp245, :ssp460, 
+                    :ssp585, :historical_co2)
             c = create_experiment_config(exp)
             @test c isa PhysicsConfig
             @test c.experiment == exp
@@ -472,6 +473,23 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             rm(tmpdir_ssp; recursive = true, force = true)
         end
 
+        tmpdir_hist = mktempdir()
+        try
+            mkpath(joinpath(tmpdir_hist, "scenario"))
+            GREB.jldopen(joinpath(tmpdir_hist, "scenario", "ipcc_scenarios.jld2"), "w") do file
+                file["scenarios"] = Dict("hist" => Dict(1850 => 280.73))
+            end
+
+            cfg = PhysicsConfig(experiment = :historical_co2)
+            result = redirect_stdout(devnull) do
+                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_hist)
+            end
+            @test length(result.scnr) == 12
+            @test cfg.co2_scenario == Dict(1850 => 280.73)
+        finally
+            rm(tmpdir_hist; recursive = true, force = true)
+        end
+
         # :paleo_solar_modern_co2/:obliquity/:eccentricity swap in a real
         # solar_scenarios/*.jld2 table at scenario start — synthesize a
         # minimal set so these three are reachable without the real dataset.
@@ -709,10 +727,13 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             @test all(==(0.0), fields_nocorr.ToF_correct)
             @test all(==(3.0), fields_nocorr.Tclim)  # loader itself still worked
 
-            # "files present" branch: add the 3 flux-correction files and reload.
-            write3(joinpath(tmpdir, "climatology", "Tsurf_flux_correction.jld2"), 15.0)
-            write3(joinpath(tmpdir, "climatology", "vapour_flux_correction.jld2"), 16.0)
-            write3(joinpath(tmpdir, "climatology", "Tocean_flux_correction.jld2"), 17.0)
+            # "files present" branch: add the combined flux-correction file and reload.
+            mkpath(joinpath(tmpdir, "climatology"))
+            GREB.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
+                f["Tsurf_flux_correction"] = fill(15.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                f["vapour_flux_correction"] = fill(16.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                f["Tocean_flux_correction"] = fill(17.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+            end
 
             fields = load_greb_jld2!(tmpdir; dataset = :ncep)
             @test all(==(1.0), fields.z_topo)

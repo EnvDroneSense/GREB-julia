@@ -499,6 +499,16 @@ nothing left to quarantine — only 2 of 49 root-level files
 (`erainterim.evaporation.clim`, `erainterim.omega.vertmean.nomean.clim`, 25.7
 MiB) are genuinely unreferenced by any code path.
 
+**✅ Confirmed not a porting gap, files removed.** Grepped every Fortran
+source variant available (`greb.model.mscm.f90`/`greb.shell.mscm.f90`, both
+the NCEP-only Downloads copy and the ERA-Interim/CMIP5/ENSO-capable
+`greb-official-official` copy) for `evap`/`evaporation`/`nomean` — zero
+`open()` statements and zero filename occurrences for either file in any
+variant checked. Neither was ever consumed by the original model; the
+Julia port's non-use correctly mirrors it, not an oversight. Both raw files
+removed from `Data/`, and `DATA_README.md` updated to stop listing
+`erainterim.evaporation.clim.bin` as required.
+
 ### 6.2 JLD2 compression: real numbers, not assumed ones
 Built the actual `greb_dataset_jld2/` output once (605.4 MiB, 53 files — JLD2's
 container format adds ~0.04% overhead over raw `.bin`) and measured
@@ -556,10 +566,155 @@ timestep. The real reason to avoid combining by source isn't performance:
   (already-combined, pre-existing) fit the same rule: a scenario index or CO2
   lookup table is inherently read as one shape, never partially.
 
+  **✅ Implemented.** Measured directly on the real 3 files (38.51 MiB
+  combined) before implementing: reading all 3 from one combined file took
+  19.89 ms vs. 30.78 ms from 3 separate files (**~35% faster**, matching the
+  "always read in full" case above), at 40,367,196 vs. 40,382,127 bytes
+  (no size penalty). Implemented in `scripts/convert_greb_to_jld2.jl`
+  (`convert_flux_corrections`, excluded from `convert_all`'s per-field loop
+  via `FLUX_CORRECTION_NAMES`) and `src/io.jl`'s `load_flux_corrections_jld2!`
+  (now reads 3 keys from one file instead of 3 files); `test/runtests.jl`'s
+  synthetic-dataset test updated to match. Full suite re-run: 319/319 pass.
+
+---
+
+## 7. Fortran switch/experiment validation — report-only, no code changes
+
+Cross-referenced every `PhysicsConfig` field and `cfg.experiment` branch
+against the actual Fortran reference: two `greb.shell.mscm.f90` variants (an
+older one without ERA-Interim/CMIP5/ENSO support, and the newer
+`greb-official-official` one with `log_clim` dataset-switching plus CMIP5
+`log_exp=230` and ENSO `log_exp=240/241` forcing) and four `run.greb.*.csh`
+scripts (`decon_mean_climate` = `log_exp=1`, `decon2xco2` = `log_exp=10`,
+`scenarios` = the full `log_exp=20-105` sensitivity table, `hydro` = the
+CMIP5/ENSO forced-boundary script). Per explicit user decision, this pass is
+documentation-only — the gaps below are real but deliberately left unfixed.
+
+### 7.1 `:rcp26`/`:rcp45`/`:rcp60` — real gap, data is ready but code isn't ✅ documented
+Fortran `log_exp=96/97/98` load `ipcc.scenario.rcp26/45/6.forcing.txt`
+directly. Julia's `forcing()` explicitly errors instead:
+`tendencies.jl:159-160` (`:rcp26`), `:162-163` (`:rcp45`), `:165-166`
+(`:rcp60`) — all three say "requires external CO₂ data file. Not yet
+implemented." But `ipcc_scenarios.jld2` already contains working
+`"rcp26"`/`"rcp45"`/`"rcp6"` keys (confirmed by actually running
+`convert_greb_to_jld2.jl` earlier this session — the CO2 data converts
+cleanly), and the exact same `(:ssp119,...,:historical_co2) =>
+cfg.co2_scenario[yr]` dispatch already at `tendencies.jl:175-180` would work
+unchanged for these three. `test/runtests.jl:441-444` confirms the gap is
+intentional-and-tested (`@test_throws ErrorException`), not an oversight.
+Closing this is a ~10-line change (add the 3 symbols to
+`_CO2_SCENARIO_SYMBOLS`/`create_experiment_config`, delete the 3 `error()`
+branches) — left undone per explicit user decision to keep this pass
+report-only.
+
+### 7.2 `:custom_co2` (EXP=100) — no file-loading path
+Fortran's `log_exp=100` lets a user point at an arbitrary
+`../input/<name>.txt` CO2 file. Julia's `:custom_co2` also just errors
+(`tendencies.jl:171-172`) — there's no `PhysicsConfig` field for a
+user-supplied file path at all, so this isn't a small dispatch-table gap
+like 7.1; it needs a new field plus a loader. Lower priority than 7.1.
+
+### 7.3 `_dmc`/`_drsp` switch families are fully wired, but have no combined preset
+Every individual switch from `run.greb.decon_mean_climate.csh`
+(`log_cloud_dmc`/`log_ocean_dmc`/`log_atmos_dmc`/`log_co2_dmc`/
+`log_hydro_dmc`/`log_qflux_dmc`) and `run.greb.decon2xco2.csh`
+(`log_topo_drsp`/`log_cloud_drsp`/`log_humid_drsp`/`log_ocean_drsp`/
+`log_hydro_drsp`) exists as a real `PhysicsConfig` field and is read at a
+real gate — `model.jl:50,55,60,67,71,75,79,120,141,284-285`,
+`radiation.jl:116`, `circulation.jl:301`, `hydrology.jl:33`, `ocean.jl:15,63`,
+`output.jl:154,158` — so none of these switches are dead. But
+`create_experiment_config` (`config.jl:104-157`) has no preset that flips a
+whole family at once the way each Fortran run script does; only
+`:constant_topo` sets a single `_drsp` field. Reproducing either Fortran run
+script today means using the bare `PhysicsConfig(log_cloud_dmc=false, ...)`
+keyword constructor directly instead of a named experiment. A
+discoverability/convenience gap, not a correctness bug.
+
+### 7.4 `:sst_plus1` has no Fortran `log_exp` counterpart — confirm intentional
+`model.jl:273,374-378` implements a `:sst_plus1` experiment (forces
+ocean-point `Ts = Tclim+1.0`) matching no `log_exp` value in any of the four
+run scripts or their comment tables. `forcing()` has no case for it either —
+it silently falls through to the generic default at `tendencies.jl:67-68`
+(`CO2 = cfg.co2_concentration`), which only produces correct behavior
+because `:sst_plus1`'s real logic lives entirely in `model.jl`. Not a bug as
+implemented, but worth an explicit confirmation that this is a deliberate
+Julia-only addition rather than a mistranslated experiment number from a
+Fortran source file not included in what was reviewed here.
+
+### 7.5 `:a1b_scenario`/`:a1b_enhanced` — hardcoded formula, not a data file
+Fortran's `log_exp=95` ("IPCC A1B scenario") is data-driven like the other
+IPCC scenarios, but no `ipcc.scenario.a1b*.txt` exists anywhere in `Data/`
+(confirmed absent, both in this repo and in the reference `input/` folder).
+Julia's `:a1b_scenario` (`tendencies.jl:80-90`) and `:a1b_enhanced`
+(`tendencies.jl:118-128`, byte-identical duplicated code) instead hardcode a
+piecewise-linear 1950→2000→2050→2100 (310→370→520 ppm) approximation. A
+reasonable stand-in given the source table was never supplied, but it's an
+approximation, not a reproduction of Fortran's real A1B forcing — worth
+flagging so it isn't mistaken for a validated match later.
+
+### 7.6 Confirmed correct / already-resolved — no action
+- **`log_clim==1` in `set_hydrology_parameters!`** (`config.jl:175-177`)
+  doesn't match Fortran's `log_clim ∈ {0 (ERA), -1 (NCEP)}` convention
+  (`greb.shell.mscm.f90:25,40` in the newer reference) — but this exact
+  discrepancy was **already investigated and resolved** in §4.2: `log_clim`
+  and the `dataset=:era/:ncep` file-selection kwarg were deliberately kept
+  orthogonal by user decision. Not re-opened here, just cross-referenced so
+  this validation pass isn't mistaken for having missed it.
+- **Obliquity/eccentricity range**: the Fortran run-script comments describe
+  `OBL∈[-250,900]`/`ECC∈[-30,30]`, but the actual `solar_forcing_scenarios/`
+  files use a step-5 convention (0..230) — already correctly handled by
+  `convert_greb_to_jld2.jl`'s glob-based discovery (its own docstring
+  documents fixing a prior hardcoded-`0:25:230`-stride bug), and Julia's
+  generic `orbital_index::Int` reads whatever `coords` values the files
+  actually contain. Confirmed already correct; the Fortran comment's stated
+  range is simply stale relative to the real file set.
+- **`dradius`/`earth_sun_distance_pct`**: naming differs, but
+  `(1/(1+0.01*pct))^2` (`tendencies.jl:156`) is a faithful translation of
+  Fortran's `log_exp=37` radius-change physics. Confirmed correct.
+- **Regional CO2 experiments (`log_exp=40-47`)**: all 8 symbols exist and
+  dispatch correctly. Noted only: `:regional_co2_ocean`/`_land_ice`/
+  `_winter`/`_summer`'s masks are set dynamically inside `forcing()`
+  (`tendencies.jl:187-232`) while the other four are reset in `init_model!`
+  (`model.jl:21-38`) — an architectural asymmetry between the two halves of
+  the same experiment family, not a bug (both paths produce correct masks),
+  worth a note so it doesn't read as an oversight later.
+
 ---
 
 ## Changelog of this document
 
+- **2026-08-10 (flux-correction combine implemented + evaporation/nomean
+  resolved, §6.1/§6.3)**: two follow-ups on §6's data-organization findings.
+  First, confirmed via direct grep of every available Fortran source variant
+  (Downloads' NCEP-only `greb.shell.mscm.f90`/`greb.model.mscm.f90`, and
+  `greb-official-official`'s ERA-Interim/CMIP5/ENSO-capable copies) that
+  `erainterim.evaporation.clim.bin`/`erainterim.omega.vertmean.nomean.clim.bin`
+  are unread by any variant — not a Julia-porting gap; both raw files have
+  since been removed from `Data/`, `DATA_README.md` updated to match. Second,
+  actually implemented §6.3's flux-correction merge (previously recommended
+  by analogy only): measured the real 3 files directly first (19.89ms vs.
+  30.78ms, ~35% faster, no size penalty), then implemented
+  `convert_flux_corrections`/`FLUX_CORRECTION_NAMES` in
+  `scripts/convert_greb_to_jld2.jl` and rewrote `load_flux_corrections_jld2!`
+  (`src/io.jl`) to read the combined `flux_corrections.jld2`; updated
+  `test/runtests.jl`'s synthetic-dataset test and both `README.md`/
+  `DATA_README.md` to match. Full suite re-run clean: 319/319 pass.
+- **2026-08-10 (Fortran switch/experiment validation, §7)**: cross-referenced
+  every `PhysicsConfig` field and `cfg.experiment` branch against 8 supplied
+  Fortran reference files (two `greb.shell.mscm.f90` variants, plus
+  `run.greb.decon_mean_climate.csh`/`decon2xco2.csh`/`scenarios.csh`/
+  `hydro.csh`). Found and documented (report-only, by explicit user
+  decision): `:rcp26`/`:rcp45`/`:rcp60` error out despite their CO2 data
+  already converting cleanly (§7.1); `:custom_co2` has no file-loading path
+  (§7.2); the Fortran `_dmc`/`_drsp` switch families are fully wired but have
+  no combined experiment preset, unlike their Fortran run scripts (§7.3);
+  `:sst_plus1` has no Fortran `log_exp` counterpart (§7.4); `:a1b_scenario`/
+  `:a1b_enhanced` hardcode a formula since no source data file exists
+  (§7.5). Confirmed as already-correct or already-resolved: the `log_clim`
+  discrepancy (already closed in §4.2), the obliquity/eccentricity numeric
+  range (already fixed by the glob-based discovery in
+  `convert_greb_to_jld2.jl`), `earth_sun_distance_pct`, and the regional CO2
+  experiment family's dynamic-vs-static mask asymmetry (§7.6).
 - **2026-08-10 (data organization & JLD2 compression investigation, §6)**:
   added `claude/DATA_ORGANIZATION_OPTIONS.md`, prompted by the CMIP5/ENSO
   forcing wiring work. Actually ran `convert_greb_to_jld2.jl` against `Data`

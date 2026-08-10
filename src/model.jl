@@ -134,7 +134,7 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     if cfg.experiment == :a1b_scenario
         CO2_ctrl = 298.0  # A1B scenario baseline
     elseif cfg.experiment in (:a1b_enhanced, :rcp26, :rcp45, :rcp60, :rcp85, :custom_co2,
-                               :ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+                               :ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
         CO2_ctrl = 280.0  # IPCC scenarios baseline
     end
 
@@ -221,7 +221,9 @@ const _SOLAR_SWAP_FORCING_TYPE = Dict(
     :eccentricity => :eccentricity,
 )
 
-const _CO2_SCENARIO_SYMBOLS = (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+const _CO2_SCENARIO_SYMBOLS = (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
+
+const _CO2_SCENARIO_KEY = Dict(:historical_co2 => :hist)
 
 """
     greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields())
@@ -266,6 +268,7 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     is_orbital_exp = cfg.experiment in (:obliquity, :eccentricity, :earth_sun_distance)
     is_forced_boundary = cfg.experiment in (:rcp85, :elnino, :lanina)
     is_sst_plus1 = cfg.experiment == :sst_plus1
+    is_historical_exp = cfg.experiment == :historical_co2
 
     # Workspace and accumulator
     ws = CirculationWorkspace()
@@ -327,10 +330,11 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
         fields.sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
     end
 
-    # IPCC SSP experiments: load the year→CO2 lookup table
+    # IPCC SSP/historical experiments: load the year→CO2 lookup table
     if cfg.experiment in _CO2_SCENARIO_SYMBOLS
         println("% loading IPCC CO2 scenario ($(cfg.experiment))...")
-        cfg.co2_scenario = load_co2_scenario_jld2(jld2_dir, cfg.experiment)
+        scenario_key = get(_CO2_SCENARIO_KEY, cfg.experiment, cfg.experiment)
+        cfg.co2_scenario = load_co2_scenario_jld2(jld2_dir, scenario_key)
     end
 
     # Reset state to initial conditions
@@ -338,7 +342,7 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     Ta .= Ta_ini
     q .= q_ini;
     To .= To_ini
-    year = is_orbital_exp ? 1 : 1950
+    year = is_orbital_exp ? 1 : (is_historical_exp ? 1850 : 1950)
     CO2 = 340.0;
     mon = 1;
     irec = 0
