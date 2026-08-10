@@ -21,7 +21,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test cfg isa PhysicsConfig
 
         for exp in (:full_model, :constant_topo, :co2_double, :co2_quadruple,
-                    :elnino, :lanina, :rcp85)
+                    :elnino, :lanina, :rcp85, :ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
             c = create_experiment_config(exp)
             @test c isa PhysicsConfig
             @test c.experiment == exp
@@ -329,20 +329,11 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         ws = CirculationWorkspace()
         cfg = create_experiment_config(:full_model)
         Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        SWradiation!(Ts, fields, state, ts, cfg, ws)  # warm up (compilation)
-        # <=64, not ==0: on Julia 1.9 (unlike 1.10+), returning a NamedTuple
-        # of 3 matrix references costs a fixed ~32-byte allocation that
-        # newer compilers elide via escape analysis — confirmed by direct
-        # reproduction on Julia 1.9.4. Unrelated in scale to the original
-        # 40704-byte/call regression this test protects against.
+        SWradiation!(Ts, fields, state, ts, cfg, ws)
         @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) <= 64
     end
 
     @testset "qflux_correction! pulls Ts/To/q to climatology; Ta gets no correction (matches Fortran)" begin
-        # A climatology that's uniform in time (same value at every ityr)
-        # reaches its correction fixed point after a single timestep, so
-        # Ts/To/q should land exactly on Tclim/Toclim/qclim, not just move
-        # closer to it.
         fields = ClimateFields()
         fields.cap_surf .= GREB.cap_ocean
         for j in 1:GREB.ydim, i in 1:GREB.xdim
@@ -373,16 +364,12 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test To ≈ fields.Toclim[:, :, 1]
         @test q ≈ fields.qclim[:, :, 1]
 
-        # Ta has no correction field — it integrates freely. Confirm it
-        # still moved from its initial value (isn't frozen/broken) even
-        # though nothing nudges it toward a climatology target.
         @test all(isfinite, Ta)
         @test Ta != fill(290.0, GREB.xdim, GREB.ydim)
     end
 
     @testset "greb_model! swaps sw_solar for paleo experiments, restores after" begin
-        # A paleo run's swapped solar table must not leak into a later run
-        # against the same reused `fields` instance.
+        # A paleo run's swapped solar table must not leak into a later run.
         fields = ClimateFields()
         saved_sw_solar = copy(fields.sw_solar)
         tmpdir = mktempdir()
@@ -449,10 +436,40 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         end
         @test length(result.scnr) == 12
 
-        # "not yet implemented" placeholders 
+        # "not yet implemented" placeholders
         for sym in (:rcp26, :rcp45, :rcp60, :custom_co2)
             cfg = PhysicsConfig(experiment = sym)
             @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+        end
+
+        # :ssp* experiments load a year=>CO2 table at scenario start
+        tmpdir_ssp = mktempdir()
+        try
+            mkpath(joinpath(tmpdir_ssp, "scenario"))
+            expected_co2 = Dict(
+                :ssp119 => 300.0, :ssp126 => 301.0, :ssp245 => 302.0,
+                :ssp460 => 303.0, :ssp585 => 304.0,
+            )
+            GREB.jldopen(joinpath(tmpdir_ssp, "scenario", "ipcc_scenarios.jld2"), "w") do file
+                file["scenarios"] = Dict(string(sym) => Dict(1950 => co2) for (sym, co2) in expected_co2)
+            end
+
+            for sym in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+                cfg = PhysicsConfig(experiment = sym)
+                result = redirect_stdout(devnull) do
+                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_ssp)
+                end
+                @test length(result.scnr) == 12
+                @test cfg.co2_scenario == Dict(1950 => expected_co2[sym])
+            end
+
+            # A year missing from the table must raise a clear error rather
+            # than silently defaulting.
+            cfg_missing_year = PhysicsConfig(experiment = :ssp585)
+            @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 2), cfg_missing_year;
+                jld2_dir = tmpdir_ssp)
+        finally
+            rm(tmpdir_ssp; recursive = true, force = true)
         end
 
         # :paleo_solar_modern_co2/:obliquity/:eccentricity swap in a real
@@ -485,6 +502,79 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             end
         finally
             rm(tmpdir; recursive = true, force = true)
+        end
+    end
+
+    @testset "CMIP5/ERA-Interim anomaly forcing is actually loaded (was previously a silent no-op)" begin
+        tmpdir_anom = mktempdir()
+        try
+            clim_dir = joinpath(tmpdir_anom, "climatology")
+            mkpath(clim_dir)
+            write_field(name, value) = GREB.jldopen(joinpath(clim_dir, name), "w") do file
+                file["data"] = fill(value, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                file["dim_names"] = ["lon", "lat", "time"]
+            end
+
+            # :rcp85 → CMIP5 RCP8.5 ensemble-mean anomaly
+            write_field("cmip5.tsurf.rcp85.ensmean.forcing.jld2", 2.0)
+            write_field("cmip5.zonal.wind.rcp85.ensmean.forcing.jld2", 3.0)
+            write_field("cmip5.meridional.wind.rcp85.ensmean.forcing.jld2", 4.0)
+            write_field("cmip5.omega.rcp85.ensmean.forcing.jld2", 5.0)
+            write_field("cmip5.windspeed.rcp85.ensmean.forcing.jld2", 6.0)
+
+            # :elnino / :lanina → ERA-Interim composite-mean anomaly
+            for suffix in ("elnino", "lanina")
+                write_field("erainterim.tsurf.$suffix.forcing.jld2", 7.0)
+                write_field("erainterim.zonal.wind.$suffix.forcing.jld2", 8.0)
+                write_field("erainterim.meridional.wind.$suffix.forcing.jld2", 9.0)
+                write_field("erainterim.omega.$suffix.forcing.jld2", 10.0)
+                write_field("erainterim.windspeed.$suffix.forcing.jld2", 11.0)
+            end
+
+            cfg = create_experiment_config(:rcp85)
+            @test cfg.log_tsurf_ext && cfg.log_hwind_ext && cfg.log_omega_ext
+            fields = ClimateFields()
+            load_cc_anomaly_jld2!(tmpdir_anom, fields, cfg)
+            @test all(==(2.0), fields.Tclim_anom_cc)
+            @test all(==(3.0), fields.uclim_anom_cc)
+            @test all(==(4.0), fields.vclim_anom_cc)
+            @test all(==(5.0), fields.omegaclim_anom_cc)
+            @test all(==(6.0), fields.wsclim_anom_cc)
+
+            # init_model! applies the anomaly on top of the (here all-zero)
+            # base climatology — Tclim must reflect it, not stay at zero.
+            redirect_stdout(devnull) do
+                init_model!(cfg, fields)
+            end
+            @test all(==(2.0), fields.Tclim)
+
+            for (sym, suffix) in ((:elnino, "elnino"), (:lanina, "lanina"))
+                cfg2 = create_experiment_config(sym)
+                @test cfg2.log_tsurf_ext && cfg2.log_hwind_ext && cfg2.log_omega_ext
+                fields2 = ClimateFields()
+                load_enso_anomaly_jld2!(tmpdir_anom, fields2, cfg2, sym)
+                @test all(==(7.0), fields2.Tclim_anom_enso)
+                @test all(==(8.0), fields2.uclim_anom_enso)
+                @test all(==(9.0), fields2.vclim_anom_enso)
+                @test all(==(10.0), fields2.omegaclim_anom_enso)
+                @test all(==(11.0), fields2.wsclim_anom_enso)
+            end
+
+            # Per-field gating: switching a gate off must not touch that
+            # field even if its file is missing (no error, stays zero).
+            cfg_partial = PhysicsConfig(experiment = :rcp85, log_tsurf_ext = true,
+                log_hwind_ext = false, log_omega_ext = false)
+            fields_partial = ClimateFields()
+            load_cc_anomaly_jld2!(tmpdir_anom, fields_partial, cfg_partial)
+            @test all(==(2.0), fields_partial.Tclim_anom_cc)
+            @test all(==(0.0), fields_partial.uclim_anom_cc)
+            @test all(==(0.0), fields_partial.omegaclim_anom_cc)
+
+            # A missing required file must error loudly, not silently zero.
+            rm(joinpath(clim_dir, "cmip5.tsurf.rcp85.ensmean.forcing.jld2"))
+            @test_throws ErrorException load_cc_anomaly_jld2!(tmpdir_anom, ClimateFields(), cfg)
+        finally
+            rm(tmpdir_anom; recursive = true, force = true)
         end
     end
 

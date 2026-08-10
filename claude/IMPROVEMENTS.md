@@ -479,8 +479,105 @@ golden regression test passing unchanged.
 
 ---
 
+## 6. Data organization & JLD2 compression — investigated, findings documented
+
+Full comparison doc: `claude/DATA_ORGANIZATION_OPTIONS.md`. Triggered by the
+CMIP5/ENSO forcing wiring work (§4's `:rcp85`/`:elnino`/`:lanina` stubs) making
+it worth asking how `Data/` and its converted `greb_dataset_jld2/` output should
+be organized and shared. Everything below is measured, not estimated — the
+conversion script was actually run (`Data` → a scratch `greb_dataset_jld2/`) and
+real `jldopen`/`tar` calls were timed, rather than assuming behavior.
+
+### 6.1 `Data/`'s layout doesn't match its own docs
+`DATA_README.md` and `convert_greb_to_jld2.jl`'s default (`input_path =
+Data/input`) both expect an `input/` subdirectory; on disk, all ~90 files sit
+directly under `Data/` (confirmed — `Data/input/` doesn't exist, had to point
+the conversion explicitly at `Data`). Recommended fix: reorganize by category
+(mirroring `convert_all`'s own static/solar/climatology routing) rather than
+just used-vs-unused, since with the CMIP5/ENSO wiring in progress there's almost
+nothing left to quarantine — only 2 of 49 root-level files
+(`erainterim.evaporation.clim`, `erainterim.omega.vertmean.nomean.clim`, 25.7
+MiB) are genuinely unreferenced by any code path.
+
+### 6.2 JLD2 compression: real numbers, not assumed ones
+Built the actual `greb_dataset_jld2/` output once (605.4 MiB, 53 files — JLD2's
+container format adds ~0.04% overhead over raw `.bin`) and measured
+`jldopen(path, "w"; compress=true)` against six representative files:
+
+| File | Compression ratio | Read slowdown vs. uncompressed |
+|---|---|---|
+| `ncep.tsurf...clim.jld2` | 80.1% | **9.5×** |
+| `cmip5.tsurf...forcing.new.jld2` | 86.6% | **7.9×** |
+| `erainterim.tsurf.elnino.forcing.jld2` | 93.2% | **20.4×** |
+| `global.topography.jld2` (static) | 29.5% | 4.0× |
+| `solar_radiation.clim.jld2` | 40.4% | 2.0× |
+| `solar_eccentricity.jld2` (grouped) | 40.8% | 11.4× |
+
+The 3D climate fields (619 of 635 MB) barely compress — 80–93% of original —
+because float32 reanalysis/ensemble-mean data has limited redundancy, while
+costing 8–20× longer to read every time. A real whole-tree `tar -I 'gzip -9'`
+run got the same story at dataset scale: only 530.6 MB from 634.8 MB (83.6%,
+measured, 42s), cross-checked against the per-category ratios above to within
+0.6%. **Conclusion: compress only for distribution** (a plain `tar`/`xz`
+archive of `greb_dataset_jld2/`, decoupled from the JLD2 read path entirely),
+never the copy `load_greb_jld2!` actually reads — the size win (~16–22%
+dataset-wide) doesn't justify an 8–20× read-time risk if anyone points the
+loader at the compressed copy by mistake.
+
+### 6.3 JLD2 grouping: combine by load-pattern, not by source
+Initial instinct was "combine per-field files by their upstream source"
+(one `cmip5.jld2`, one `erainterim.jld2`, one `ncep.jld2`). Tested this
+directly instead of assuming: merged 5 real CMIP5 fields (67.3 MB) into one
+multi-key file and timed reads.
+
+| | Combined (5-key) file | Separate files |
+|---|---|---|
+| Read only 1 field | 24.0 ms | 10.3 ms — combined costs **2.3×** more |
+| Read all 5 fields | 45.0 ms | 50.2 ms — combined is *faster* |
+
+So combining helps exactly when a group is always read in full, and hurts when
+only a subset is needed — but the 2.3× penalty is ~14 ms in absolute terms,
+irrelevant for a `load_greb_jld2!` call that runs once at startup, not per
+timestep. The real reason to avoid combining by source isn't performance:
+- `ncep.*`/`erainterim.*` are each read in different subsets depending on
+  `dataset=:ncep`/`:era` and which experiment is active — combining by source
+  would couple independently-varying load conditions into one file.
+- `cmip5.*` is 16 raw files but probably only ~5 distinct fields will feed
+  `*_anom_cc`, with an undecided `.bin`-vs-`.new.bin` duplicate for most of
+  them (see the earlier session's byte-level diff — same shape, genuinely
+  different values, no code or docs pick a winner). Combining now bakes both
+  variants into a shared blob that would need unpacking and rewriting later
+  just to drop the loser.
+- The one case where combining *is* recommended — merging the three
+  flux-correction files into `flux_corrections.jld2` — works precisely because
+  `load_flux_corrections_jld2!` (`src/io.jl:82-100`) already always loads all
+  three together, matching the "always read in full" condition the benchmark
+  above says combining rewards. `solar_eccentricity.jld2`/`ipcc_scenarios.jld2`
+  (already-combined, pre-existing) fit the same rule: a scenario index or CO2
+  lookup table is inherently read as one shape, never partially.
+
+---
+
 ## Changelog of this document
 
+- **2026-08-10 (data organization & JLD2 compression investigation, §6)**:
+  added `claude/DATA_ORGANIZATION_OPTIONS.md`, prompted by the CMIP5/ENSO
+  forcing wiring work. Actually ran `convert_greb_to_jld2.jl` against `Data`
+  into a scratch output (605.4 MiB, 53 files) to get measured numbers instead
+  of estimates; measured `compress=true` size/read-time tradeoffs on 6
+  representative files (8–20× slower reads for 80–93% compression ratios on
+  the 3D climate fields); measured real `tar+gzip`/`tar+xz` whole-tree
+  archives (only 16–22% smaller, cross-checked against per-category ratios to
+  within 0.6%); and — in response to the user directly challenging the initial
+  recommendation — tested combining 5 CMIP5 fields into one multi-key file
+  head-to-head against separate files, finding a real but small (2.3×, ~14 ms)
+  single-key-read penalty that's irrelevant for a once-at-startup load. Revised
+  conclusion: group by load-pattern (things always read together, like the
+  flux-correction trio) not by upstream source (`cmip5`/`erainterim`/`ncep`),
+  since those sources are read in different subsets depending on
+  `dataset=:ncep`/`:era` and active experiment, and CMIP5 additionally has an
+  undecided `.bin`-vs-`.new.bin` duplicate that shouldn't be baked into a
+  shared blob yet.
 - **2026-08-06 (seventh pass: `SurfaceState` struct, testing gaps, §4
   decisions, README)**: implemented §1.3's argument-struct collapse — a
   `SurfaceState` struct for `Ts`/`Ta`/`To`/`q`, reusing the already-existing

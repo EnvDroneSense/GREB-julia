@@ -49,7 +49,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 
 - **Performance optimizations** using `@turbo` (SIMD vectorization)
 - **Interactive visualization** through Pluto.jl
-- **Multiple climate scenarios** (e.g., IPCC RCP scenarios)
+- **Multiple climate scenarios** (e.g., IPCC RCP and SSP scenarios)
 - **Flexible experiment configurations**
 
 ## Features
@@ -58,7 +58,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 - ⏱️ 12-hour main time steps with 30-minute sub-steps for circulation
 - 📊 Real-time visualization of climate variables
 - 🔬 Support for multiple climate datasets (NCEP, ERA-Interim)
-- 🌡️ Future climate scenarios (RCP 2.6, 4.5, 6.0, 8.5)
+- 🌡️ Future climate scenarios (RCP 2.6/4.5/6.0/8.5; SSP1-1.9/1-2.6/2-4.5/4-6.0/5-8.5 — RCP8.5 and the five SSPs are implemented, the other RCPs remain "not yet implemented" placeholders)
 - ☀️ Orbital forcing and paleoclimate experiments
 
 ## 🚀 Quick Start
@@ -141,10 +141,12 @@ greb_dataset_jld2/
 │   └── [flux_correction files]
 ├── solar/
 │   └── solar_radiation.clim.jld2   # 2D (48×730)
-└── solar_scenarios/                # Optional
-    ├── solar_paleo.jld2
-    ├── solar_eccentricity.jld2    # (ecc_index, lat, time), coords[1] = actual eccentricity values
-    └── solar_obliquity.jld2       # (obl_index, lat, time), coords[1] = actual obliquity angles
+├── solar_scenarios/                # Optional
+│   ├── solar_paleo.jld2
+│   ├── solar_eccentricity.jld2    # (ecc_index, lat, time), coords[1] = actual eccentricity values
+│   └── solar_obliquity.jld2       # (obl_index, lat, time), coords[1] = actual obliquity angles
+└── scenario/                        # Optional
+    └── ipcc_scenarios.jld2   # Dict{String,Dict{Int,Float64}}, keyed "rcp85"/"ssp585"/"hist"/...
 ```
 
 ### Loading Data
@@ -168,7 +170,7 @@ fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 ### 2. Configure the Experiment
 
 ```julia
-cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85, ...
+cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85, :ssp585, ...
 cfg.log_rain = 1                              # override any switch after construction
 ```
 

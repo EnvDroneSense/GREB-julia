@@ -133,7 +133,8 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
     if cfg.experiment == :a1b_scenario
         CO2_ctrl = 298.0  # A1B scenario baseline
-    elseif cfg.experiment in (:a1b_enhanced, :rcp26, :rcp45, :rcp60, :rcp85, :custom_co2)
+    elseif cfg.experiment in (:a1b_enhanced, :rcp26, :rcp45, :rcp60, :rcp85, :custom_co2,
+                               :ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
         CO2_ctrl = 280.0  # IPCC scenarios baseline
     end
 
@@ -220,6 +221,8 @@ const _SOLAR_SWAP_FORCING_TYPE = Dict(
     :eccentricity => :eccentricity,
 )
 
+const _CO2_SCENARIO_SYMBOLS = (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+
 """
     greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields())
 
@@ -244,6 +247,14 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     state = ModelState()
 
     # ── 1. Initialisation ───────────────────────────────────────
+    if cfg.experiment == :rcp85
+        load_cc_anomaly_jld2!(jld2_dir, fields, cfg)
+    elseif cfg.experiment == :elnino
+        load_enso_anomaly_jld2!(jld2_dir, fields, cfg, :elnino)
+    elseif cfg.experiment == :lanina
+        load_enso_anomaly_jld2!(jld2_dir, fields, cfg, :lanina)
+    end
+
     ini = init_model!(cfg, fields)
     Ts_ini = ini.Ts_ini;
     Ta_ini = ini.Ta_ini
@@ -314,6 +325,12 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
         forcing_type = _SOLAR_SWAP_FORCING_TYPE[cfg.experiment]
         println("% loading alternate solar forcing ($forcing_type)...")
         fields.sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
+    end
+
+    # IPCC SSP experiments: load the year→CO2 lookup table
+    if cfg.experiment in _CO2_SCENARIO_SYMBOLS
+        println("% loading IPCC CO2 scenario ($(cfg.experiment))...")
+        cfg.co2_scenario = load_co2_scenario_jld2(jld2_dir, cfg.experiment)
     end
 
     # Reset state to initial conditions

@@ -21,6 +21,7 @@ using JLD2
 export PhysicsConfig, RunSpec, CirculationWorkspace, MonthlyAccumulator, TimeState, MonthlyRecord
 export ClimateFields, ModelState, SurfaceState
 export read_jld2, load_solar_forcing_jld2, load_flux_corrections_jld2!, load_greb_jld2!
+export load_co2_scenario_jld2, load_cc_anomaly_jld2!, load_enso_anomaly_jld2!
 export create_experiment_config, set_hydrology_parameters!, init_model!
 export SWradiation!, LWradiation!, hydro!, convergence!, seaice!, deep_ocean!
 export diffusion!, advection!, circulation!, tendencies!, forcing
@@ -43,15 +44,18 @@ include("postprocess.jl")
 include("model.jl")
 
 using PrecompileTools: @compile_workload
+using Logging: with_logger, NullLogger
 
 @compile_workload begin
-    redirect_stdout(devnull) do
-        cfg = create_experiment_config(:full_model)
-        greb_model!(RunSpec(scnr=0), cfg; jld2_dir="")
+    with_logger(NullLogger()) do
+        redirect_stdout(devnull) do
+            cfg = create_experiment_config(:full_model)
+            greb_model!(RunSpec(scnr=0), cfg; jld2_dir="")
 
-        cfg_eva0 = create_experiment_config(:full_model)
-        cfg_eva0.log_eva = 0
-        greb_model!(RunSpec(scnr=0), cfg_eva0; jld2_dir="")
+            cfg_eva0 = create_experiment_config(:full_model)
+            cfg_eva0.log_eva = 0
+            greb_model!(RunSpec(scnr=0), cfg_eva0; jld2_dir="")
+        end
     end
 end
 

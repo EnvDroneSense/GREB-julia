@@ -5,20 +5,19 @@
 # that `load_greb_jld2!`/`GREB.read_jld2` read (see README.md's "Input Data"
 # section for the resulting directory structure).
 #
-# Each field is written as its own `.jld2` file storing plain Julia values
-# under the keys "data" (Array{Float32}), "dim_names", and optionally
-# "coords" (physical coordinate values per dimension, e.g. the actual
+# Each field is written as its own `.jld2` file with keys "data"
+# (Array{Float32}), "dim_names", and optionally "coords" (e.g. the actual
 # eccentricity/obliquity value behind a stacked scenario slice) and "ctl"
-# (the original GrADS .ctl metadata text, if present) — no custom binary
-# format, no header to hand-parse.
+# (the original GrADS .ctl text, if present).
 #
-# Solar forcing scenario families (eccentricity, obliquity) are discovered
-# by globbing `greb.solar.<prefix>.<N>.bin` and sorting numerically, NOT by
-# a hardcoded stride — an earlier version of this pipeline (JDAL2) hardcoded
-# `0:25:230` for obliquity, which only matched 10 of the 47 files that
-# actually exist (steps of 5, not 25), silently discarding ~79% of the
-# obliquity scenario data. Globbing means this can't happen again even if
-# the input file set changes.
+# Solar scenario families (eccentricity, obliquity) are discovered by
+# globbing `greb.solar.<prefix>.<N>.bin` and sorting numerically rather than
+# assuming a fixed stride, since the real files aren't evenly spaced.
+#
+# CO₂ scenario text files (`ipcc.scenario.<key>.forcing*.txt` — RCPs, SSPs,
+# and the historical CO2/emission/population file) are parsed into
+# `year => CO2` lookup tables and combined into a single
+# `scenario/ipcc_scenarios.jld2`, keyed by `<key>` (e.g. "rcp85", "ssp585").
 #
 # Usage:
 #   julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
@@ -150,12 +149,7 @@ function read_solar_bin(filepath::String)
     return read_bin(filepath, (LAT, TIME))
 end
 
-"""
-Find all files matching `greb.solar.<prefix>.<number>.bin` in `dir`, and
-return them sorted by the numeric value (not lexicographically), along
-with the parsed numeric values. Errors if no files match, since a missing
-prefix almost certainly means the input layout changed.
-"""
+"""Find `greb.solar.<prefix>.<N>.bin` files in `dir`, sorted by N (not lexicographically)."""
 function discover_indexed_scenario_files(dir::String, prefix::String)
     pattern = Regex("^greb\\.solar\\.$(prefix)\\.(\\d+)\\.bin\$")
     matches = Tuple{Float64,String}[]
@@ -243,6 +237,54 @@ function convert_solar_scenarios(input_path::String, output_dir::String)
 end
 
 # ============================================================================
+# CO₂ SCENARIO TEXT FILES (RCP/SSP/historical) - combined into one JLD2 file
+# ============================================================================
+
+"""Parse `ipcc.scenario.*.forcing*.txt` (`year CO2 [...]` per line) into a `year => CO2` table; extra columns are ignored."""
+function parse_co2_scenario(path::String)
+    table = Dict{Int,Float64}()
+    for line in eachline(path)
+        cols = split(strip(line))
+        isempty(cols) && continue
+        table[parse(Int, cols[1])] = parse(Float64, cols[2])
+    end
+    return table
+end
+
+"""Parse every `ipcc.scenario.<key>.forcing*.txt` in `input_path` into one combined `scenario/ipcc_scenarios.jld2`, keyed by `<key>`."""
+function convert_scenario_texts(input_path::String, output_dir::String)
+    println("🔄 CONVERTING CO₂ SCENARIO FILES")
+    println("="^50)
+
+    pattern = r"^ipcc\.scenario\.(.+)\.forcing.*\.txt$"
+    txt_files = filter(f -> match(pattern, basename(f)) !== nothing,
+                        readdir(input_path; join=true))
+
+    if isempty(txt_files)
+        println("  ⚠ No ipcc.scenario.*.forcing*.txt files found in $input_path — skipping\n")
+        return
+    end
+
+    scenarios = Dict{String,Dict{Int,Float64}}()
+    for path in sort(txt_files)
+        key = match(pattern, basename(path)).captures[1]
+        try
+            scenarios[key] = parse_co2_scenario(path)
+            println("  ✓ $(basename(path)) → \"$key\" ($(length(scenarios[key])) years)")
+        catch e
+            println("  ❌ $(basename(path)): $e")
+        end
+    end
+
+    out_path = joinpath(output_dir, "ipcc_scenarios.jld2")
+    mkpath(dirname(out_path))
+    jldopen(out_path, "w") do file
+        file["scenarios"] = scenarios
+    end
+    println("✅ Wrote $(length(scenarios)) scenario table(s) → $out_path\n")
+end
+
+# ============================================================================
 # VERIFICATION
 # ============================================================================
 
@@ -265,6 +307,14 @@ function verify(output_dir::String)
         end
     end
 
+    scenario_path = joinpath(output_dir, "scenario", "ipcc_scenarios.jld2")
+    if isfile(scenario_path)
+        scenarios = jldopen(scenario_path, "r") do file
+            file["scenarios"]
+        end
+        println("✅ CO2 scenarios: $(sort(collect(keys(scenarios))))")
+    end
+
     println("\n✅ Done!")
 end
 
@@ -278,6 +328,7 @@ function main(input_path::String, output_dir::String)
     end
     convert_all(input_path, output_dir)
     convert_solar_scenarios(input_path, joinpath(output_dir, "solar_scenarios"))
+    convert_scenario_texts(input_path, joinpath(output_dir, "scenario"))
     verify(output_dir)
 end
 
