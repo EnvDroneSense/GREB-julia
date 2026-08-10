@@ -10,8 +10,7 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 > **Repository layout (v0.1):** GREB is now organized as a standard Julia package.
 > The model code lives under `src/` (a `module GREB`, originally extracted
 > **verbatim** from the notebook and since split into topical files - see
-> `src/GREB.jl` for the include order), tests in `test/`, kernel benchmarks in
-> `benchmark/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+> `src/GREB.jl` for the include order), tests in `test/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
 > site in `docs/`, a plain-Julia driver in `examples/run_greb.jl`, and the
 > original interactive Pluto notebook - unchanged - in `notebooks/GREB_julia.jl`.
 > See [Project Structure](#project-structure) for the full layout.
@@ -28,7 +27,7 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 
 ## 📖 Table of Contents
 
-- [About the Model](#About-the-Model)
+- [About the Model](#about-the-model)
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
@@ -38,7 +37,7 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 - [Project Structure](#project-structure)
 - [Key Model Components](#key-model-components)
 - [References](#references)
-- [Contributing](#contributing)
+- [Contributing](#reporting-issues)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
 
@@ -92,9 +91,7 @@ This installs all dependencies from `Project.toml`:
 | `PrecompileTools` | Precompiles hot kernels at build time (faster first run) |
 
 The Pluto notebook environment (`notebooks/`) separately depends on `PlutoUI`
-for its interactive controls. Kernel micro-benchmarks live in their own
-environment under `benchmark/` (`BenchmarkTools`) - see
-[claude/BENCHMARKS.md](claude/BENCHMARKS.md). The [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+for its interactive controls. The [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
 site under `docs/` has its own environment too.
 
 ### Launch Pluto (optional)
@@ -218,20 +215,6 @@ widgets instead of code:
 Toggle the **Execute Model** checkbox to run; results land in `last_run`
 (same `.ctrl`/`.scnr` shape as above).
 
-## 🎛️ Interactive Controls
-
-| Section              | Controls                                                                   |
-| :------------------- | :------------------------------------------------------------------------- |
-| **Experiment**       | Dropdown: full_model, co2_double, elnino, rcp85, etc.                      |
-| **Physics Preset**   | Full / No Feedbacks / MSCM / Sensitivity / Custom                          |
-| **Mean Climate**     | Clouds, Vapor, Ice, Circulation, Hydrology, Atmosphere, CO₂, Ocean, Q-Flux |
-| **CO₂ Response**     | Clouds, Vapor, Circulation, Hydrology, Topography, Humidity                |
-| **Circulation**      | Ice albedo, Horizontal/Vertical diffusion & advection, Convergence         |
-| **Hydrology**        | Rain mode (-1..3), Evaporation mode (-1..2), Climatology (ERA/NCEP)        |
-| **External Forcing** | Surface temperature, Horizontal wind, Vertical velocity                    |
-| **Run Duration**     | Flux correction, Control, Scenario years (0-100 each)                      |
-| **Execute**          | Run checkbox                                                               |
-
 ## 📁 Project Structure
 
 ```
@@ -249,12 +232,11 @@ GREB-julia/
 │   ├── postprocess.jl          # monthly climatology/anomalies
 │   └── model.jl                # init_model!/qflux_correction!/greb_model!
 ├── test/runtests.jl            # unit, integration, and golden-regression tests
-├── benchmark/                  # per-kernel BenchmarkTools micro-benchmarks
 ├── docs/                       # Documenter.jl site (API reference + tutorial)
 ├── examples/run_greb.jl        # plain-Julia driver (no Pluto)
 ├── notebooks/GREB_julia.jl     # original interactive Pluto notebook (unchanged)
 ├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter
-└── claude/                     # dev notes: IMPROVEMENTS.md, BENCHMARKS.md
+└── claude/                     # dev notes: IMPROVEMENTS.md
 ```
 
 ## 🔬 Key Model Components
@@ -282,14 +264,6 @@ GREB-julia/
 ---
 ## ⚠️ Known Issues
 
-### Qflux correction - resolved
-`qflux_correction!` now has dedicated test coverage (`test/runtests.jl`) and
-was checked directly against the Fortran reference. The one asymmetry that
-looked suspicious - `Ts`/`To`/`q` all get a climatology-forced correction
-field, but `Ta` never does - turns out to be intentional: Fortran's own
-`qflux_correction` subroutine does the identical thing (no `TaF_correct`
-array exists anywhere in the Fortran source either). See
-[`claude/IMPROVEMENTS.md`](claude/IMPROVEMENTS.md) §3 for the full writeup.
 
 ### Reporting Issues
 
@@ -302,7 +276,7 @@ If you encounter these or other problems:
    - Error messages or unexpected behavior description
    - Steps to reproduce
 
-Contributions to fix these issues are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions to fix these issues are welcome! Open a pull request or an issue on GitHub.
 
 ---
 ## 🔭 Future Plans

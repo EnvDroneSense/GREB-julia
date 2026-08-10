@@ -66,7 +66,7 @@ end
 
 Accumulates the current timestep into `acc`; on the last timestep of `mon`,
 pushes a monthly-mean [`MonthlyRecord`](@ref) onto `output_buf`, resets `acc`,
-and advances to the next month. Returns `(irec, mon)`. `tend` is the
+and advances to the next month. Returns `(mon, irec)`. `tend` is the
 `NamedTuple` [`tendencies!`](@ref) returns; `ws.precip_out`/`evap_out`/
 `qcrcl_out` hold this step's converted precipitation/evaporation/moisture-
 circulation output.
@@ -100,7 +100,7 @@ function output!(it, irec, mon, surf::SurfaceState, tend, ws::CirculationWorkspa
         reset!(acc)
         mon = mon == 12 ? 1 : mon + 1
     end
-    return (irec=irec, mon=mon)
+    return (mon=mon, irec=irec)
 end
 
 """
