@@ -330,7 +330,12 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         cfg = create_experiment_config(:full_model)
         Ts = fill(290.0, GREB.xdim, GREB.ydim)
         SWradiation!(Ts, fields, state, ts, cfg, ws)  # warm up (compilation)
-        @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) == 0
+        # <=64, not ==0: on Julia 1.9 (unlike 1.10+), returning a NamedTuple
+        # of 3 matrix references costs a fixed ~32-byte allocation that
+        # newer compilers elide via escape analysis — confirmed by direct
+        # reproduction on Julia 1.9.4. Unrelated in scale to the original
+        # 40704-byte/call regression this test protects against.
+        @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) <= 64
     end
 
     @testset "qflux_correction! pulls Ts/To/q to climatology; Ta gets no correction (matches Fortran)" begin
