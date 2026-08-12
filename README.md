@@ -76,7 +76,9 @@ cd GREB-julia
 
 ### Installation
 
-Open Julia and run:
+GREB is not yet registered in the Julia General Registry — once it is,
+`Pkg.add("GREB")` will work directly. Until then, install from the git
+clone above:
 
 ```julia
 using Pkg

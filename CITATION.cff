@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it using the metadata below, and
+  cite the underlying GREB model papers listed under "references".
+title: "GREB.jl: A Julia Implementation of the Globally Resolved Energy Balance Model"
+type: software
+authors:
+  - name: "Thomas Struys"
+  - name: "Dietmar Dommenget and colleagues (original GREB)"
+version: 1.0.0
+date-released: "2026-08-12"
+repository-code: "https://github.com/EnvDroneSense/GREB-julia"
+license: MIT
+keywords:
+  - climate model
+  - energy balance model
+  - Julia
+  - GREB
+references:
+  - type: article
+    authors:
+      - name: "Dietmar Dommenget"
+      - name: "Janine Flöter"
+    title: "Conceptual Understanding of Climate Change with a Globally Resolved Energy Balance Model"
+    journal: "Climate Dynamics"
+    volume: "37"
+    year: 2011
+    pages: "2143-2165"
+    doi: "10.1007/s00382-011-1026-0"
+  - type: article
+    authors:
+      - name: "Christian Stassen"
+      - name: "Dietmar Dommenget"
+      - name: "Nicholas Loveday"
+    title: "A hydrological cycle model for the Globally Resolved Energy Balance (GREB) model v1.0"
+    journal: "Geoscientific Model Development"
+    volume: "12"
+    year: 2019
+    pages: "425-440"
+    doi: "10.5194/gmd-12-425-2019"
+  - type: article
+    authors:
+      - name: "Dietmar Dommenget"
+      - name: "Kevin Nice"
+      - name: "Tobias Bayr"
+      - name: "Dieter Kasang"
+      - name: "Christian Stassen"
+      - name: "Michael Rezny"
+    title: >-
+      The Monash Simple Climate Model Experiments: An interactive database
+      of the mean climate, climate change and scenarios simulations
+    journal: "Geoscientific Model Development"
+    volume: "12"
+    year: 2019
+    pages: "2155-2179"
+    doi: "10.5194/gmd-12-2155-2019"
