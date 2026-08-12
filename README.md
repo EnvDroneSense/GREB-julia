@@ -240,7 +240,7 @@ GREB-julia/
 ├── examples/run_greb.jl        # plain-Julia driver (no Pluto)
 ├── notebooks/GREB_julia.jl     # original interactive Pluto notebook (unchanged)
 ├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter
-└── claude/                     # dev notes: IMPROVEMENTS.md
+└── claude/                     # dev notes: IMPROVEMENTS.md (current state), CHANGELOG.md (audit trail)
 ```
 
 ## 🔬 Key Model Components
