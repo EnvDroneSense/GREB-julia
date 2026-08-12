@@ -65,6 +65,11 @@ Base.@kwdef mutable struct PhysicsConfig
 
     # IPCC scenario CO₂ lookup table (year => ppm)
     co2_scenario::Dict{Int,Float64} = Dict{Int,Float64}()
+
+    # :custom_co2 experiment: path to a user-supplied "year CO2" text file
+    # (same format as the IPCC scenario files), loaded into `co2_scenario`
+    # at scenario start.
+    custom_co2_path::String = ""
 end
 
 """
@@ -83,9 +88,16 @@ end
 
 begin
     """
-        create_experiment_config(experiment::Symbol) -> PhysicsConfig
+        create_experiment_config(experiment::Symbol; co2_path="",
+            log_clouds_dmc=true, log_ocean_dmc=true, log_atmos_dmc=true,
+            log_co2_dmc=true, log_hydro_dmc=true, log_qflux_dmc=true,
+            log_topo_drsp=true, log_clouds_drsp=true, log_humid_drsp=true,
+            log_ocean_drsp=true, log_hydro_drsp=true, log_ice=true, log_hdif=true,
+            log_hadv=true, log_vdif=true, log_vadv=true) -> PhysicsConfig
 
     Create a pre-configured `PhysicsConfig` for common experiment types.
+    The `log_*` keywords are only used by `:decon_mean_climate`/`:decon_2xco2`
+    (see below); `co2_path` is only used by `:custom_co2`.
 
     # Experiments
     - `:full_model` - All processes active (default)
@@ -96,11 +108,20 @@ begin
     - `:elnino` - El Niño conditions
     - `:lanina` - La Niña conditions
     - `:paleo_231kyr` - Paleoclimate (200 ppm CO₂)
-    - `:rcp85` - RCP8.5 climate change scenario
+    - `:rcp26`/`:rcp45`/`:rcp60`/`:rcp85` - IPCC RCP climate change scenarios
+    - `:custom_co2` - user-supplied CO₂ trajectory, `co2_path` keyword gives
+      the "year CO2" text file path (see [`load_custom_co2_scenario`](@ref))
     - `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`
     - `:historical_co2` - Observed CO₂ 1850–2017 (year starts at 1850, not 1950)
+    - `:decon_mean_climate` - deconstruct-mean-state experiment 
+    - `:decon_2xco2` - deconstruct-2×CO₂-response experiment 
     """
-    function create_experiment_config(experiment::Symbol)::PhysicsConfig
+    function create_experiment_config(experiment::Symbol; co2_path::AbstractString="",
+        log_clouds_dmc::Bool=true, log_ocean_dmc::Bool=true, log_atmos_dmc::Bool=true,
+        log_co2_dmc::Bool=true, log_hydro_dmc::Bool=true, log_qflux_dmc::Bool=true,
+        log_topo_drsp::Bool=true, log_clouds_drsp::Bool=true, log_humid_drsp::Bool=true,
+        log_ocean_drsp::Bool=true, log_hydro_drsp::Bool=true, log_ice::Bool=true, log_hdif::Bool=true,
+        log_hadv::Bool=true, log_vdif::Bool=true, log_vadv::Bool=true)::PhysicsConfig
         if experiment == :full_model
             return PhysicsConfig(experiment=:full_model)
 
@@ -142,12 +163,46 @@ begin
             cfg.log_tsurf_ext = cfg.log_hwind_ext = cfg.log_omega_ext = true
             return cfg
 
-        elseif experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+        elseif experiment in (:rcp26, :rcp45, :rcp60, :ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
             cfg = PhysicsConfig(experiment=experiment)
             return cfg
 
         elseif experiment == :historical_co2
             cfg = PhysicsConfig(experiment=:historical_co2)
+            return cfg
+
+        elseif experiment == :custom_co2
+            cfg = PhysicsConfig(experiment=:custom_co2)
+            cfg.custom_co2_path = co2_path
+            return cfg
+
+        elseif experiment == :decon_mean_climate
+            cfg = PhysicsConfig(experiment=:decon_mean_climate)
+            cfg.log_clouds_dmc = log_clouds_dmc
+            cfg.log_ocean_dmc = log_ocean_dmc
+            cfg.log_atmos_dmc = log_atmos_dmc
+            cfg.log_co2_dmc = log_co2_dmc
+            cfg.log_hydro_dmc = log_hydro_dmc
+            cfg.log_qflux_dmc = log_qflux_dmc
+            cfg.log_ice = log_ice
+            cfg.log_hdif = log_hdif
+            cfg.log_hadv = log_hadv
+            cfg.log_vdif = log_vdif
+            cfg.log_vadv = log_vadv
+            return cfg
+
+        elseif experiment == :decon_2xco2
+            cfg = PhysicsConfig(experiment=:decon_2xco2, co2_concentration=680.0)
+            cfg.log_topo_drsp = log_topo_drsp
+            cfg.log_clouds_drsp = log_clouds_drsp
+            cfg.log_humid_drsp = log_humid_drsp
+            cfg.log_ocean_drsp = log_ocean_drsp
+            cfg.log_hydro_drsp = log_hydro_drsp
+            cfg.log_ice = log_ice
+            cfg.log_hdif = log_hdif
+            cfg.log_hadv = log_hadv
+            cfg.log_vdif = log_vdif
+            cfg.log_vadv = log_vadv
             return cfg
 
         else

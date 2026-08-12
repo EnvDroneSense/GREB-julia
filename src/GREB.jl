@@ -21,7 +21,7 @@ using JLD2
 export PhysicsConfig, RunSpec, CirculationWorkspace, MonthlyAccumulator, TimeState, MonthlyRecord
 export ClimateFields, ModelState, SurfaceState
 export read_jld2, load_solar_forcing_jld2, load_flux_corrections_jld2!, load_greb_jld2!
-export load_co2_scenario_jld2, load_cc_anomaly_jld2!, load_enso_anomaly_jld2!
+export load_co2_scenario_jld2, load_custom_co2_scenario, load_cc_anomaly_jld2!, load_enso_anomaly_jld2!
 export create_experiment_config, set_hydrology_parameters!, init_model!
 export SWradiation!, LWradiation!, hydro!, convergence!, seaice!, deep_ocean!
 export diffusion!, advection!, circulation!, tendencies!, forcing

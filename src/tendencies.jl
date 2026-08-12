@@ -76,8 +76,9 @@ end
 Returns `(CO2, sw_solar_forcing)` for the current timestep, computed
 according to `cfg.experiment`. Some experiments (the `regional_co2_*` family)
 also mutate `fields.co2_part` as a side effect. `:full_model` short-circuits
-before the experiment dispatch chain. The `:ssp*`/`:historical_co2`
-experiments look `year` up in `cfg.co2_scenario`.
+before the experiment dispatch chain. The `:rcp26`/`:rcp45`/`:rcp60`/
+`:custom_co2`/`:ssp*`/`:historical_co2` experiments look `year` up in
+`cfg.co2_scenario`.
 """
 function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
@@ -171,24 +172,13 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
         CO2 = 340.0     # Solar constant varies with Earth-Sun distance
         sw_solar_forcing = (1.0 / (1.0 + 0.01 * cfg.earth_sun_distance_pct))^2
 
-    # - File I/O dependent experiments (placeholders) ───────────────────────
-    elseif cfg.experiment == :rcp26
-        error("RCP2.6 scenario requires external CO₂ data file. Not yet implemented.")
-
-    elseif cfg.experiment == :rcp45
-        error("RCP4.5 scenario requires external CO₂ data file. Not yet implemented.")
-
-    elseif cfg.experiment == :rcp60
-        error("RCP6.0 scenario requires external CO₂ data file. Not yet implemented.")
-
     elseif cfg.experiment == :rcp85
         CO2 = 340.0  # Handled by boundary conditions
 
-    elseif cfg.experiment == :custom_co2
-        error("Custom CO₂ scenario requires external trajectory file. Not yet implemented.")
-
-    # - IPCC SSP/historical scenarios - CO₂ read from a per-year lookup table ─
-    elseif cfg.experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
+    # - IPCC RCP/SSP/historical/custom scenarios - CO₂ read from a per-year
+    #   lookup table (`cfg.co2_scenario`, populated at scenario start) ───────
+    elseif cfg.experiment in (:rcp26, :rcp45, :rcp60, :custom_co2,
+                               :ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
         yr = round(Int, year)
         haskey(cfg.co2_scenario, yr) ||
             error("No CO2 data for year $yr in $(cfg.experiment) scenario table " *

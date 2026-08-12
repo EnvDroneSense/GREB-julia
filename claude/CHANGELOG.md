@@ -169,6 +169,50 @@ reverted after judging the Fortran value itself wasn't worth copying.
 
 ## Changelog of this document
 
+- **2026-08-12 (implemented §7.1/§7.2/§7.3)**: §7's Fortran switch/experiment
+  validation was originally report-only by explicit decision; asked to
+  actually implement the 3 actionable gaps (§7.4/§7.5/§7.6 stay
+  documentation-only — §7.4 separately reconfirmed intentional).
+  Cross-checked the real Fortran run scripts directly
+  (`run.greb.decon_mean_climate.csh`, `run.greb.decon2xco2.csh`,
+  `run.greb.hydro.csh`, found in the sibling `greb-official-official/`
+  folder) rather than relying on the earlier audit's summary alone — this
+  confirmed the exact family membership for §7.3 (`decon_mean_climate.csh`'s
+  namelist sets 6 `_dmc` fields + 5 circulation switches;
+  `decon2xco2.csh`'s sets 5 `_drsp` fields, notably *not* `log_crcl_drsp` +
+  the same 5 circulation switches) and the Fortran text-file mechanism
+  behind §7.1/§7.2 (both `log_exp=96-98` and `log_exp=100` read the same
+  `year CO2` unit-26 text file format, differing only in which file gets
+  symlinked to it).
+  - §7.1: `forcing()` (`tendencies.jl`) now dispatches `:rcp26`/`:rcp45`/
+    `:rcp60` through the same `cfg.co2_scenario[year]` lookup already used
+    by `:ssp*`/`:historical_co2`, replacing the 3 unconditional `error()`
+    branches. `model.jl`'s `_CO2_SCENARIO_SYMBOLS`/`_CO2_SCENARIO_KEY` gained
+    the 3 symbols (`:rcp60 => :rcp6`, since the jld2 key doesn't match the
+    symbol name the way `:rcp26`/`:rcp45` do). `create_experiment_config`
+    gained a matching preset.
+  - §7.2: `PhysicsConfig` gained `custom_co2_path::String`; `src/io.jl`
+    gained `load_custom_co2_scenario`, a plain-text `year CO2` parser
+    (skips blank/`#` lines) matching the Fortran file format exactly;
+    `model.jl` loads it into `cfg.co2_scenario` at scenario start (clear
+    error if the path is unset), reusing §7.1's `forcing()` dispatch
+    unchanged. `create_experiment_config(:custom_co2; co2_path=...)` sets it.
+  - §7.3: added `create_experiment_config(:decon_mean_climate; ...)` and
+    `create_experiment_config(:decon_2xco2; ...)`, each keyword-argument per
+    family member (default `true`, matching the Fortran namelist defaults),
+    mirroring the two Fortran run scripts. Pure discoverability/convenience
+    addition — no `forcing()`/dispatch changes needed, since every
+    individual switch already worked and both experiments' CO2 handling
+    falls through to existing, already-correct code paths (`:decon_2xco2`
+    is architecturally identical to the existing `:co2_double` pattern).
+  Replaced the old "not yet implemented" placeholder test
+  (`test/runtests.jl`, previously asserting `@test_throws` for all 4
+  symbols) with real synthetic-`ipcc_scenarios.jld2`/temp-CO2-file runs for
+  `:rcp26`/`:rcp45`/`:rcp60`/`:custom_co2`, plus new tests for the two decon
+  presets (default-kwarg values, one-override propagation, and a
+  `greb_model!` smoke run each). Full suite re-run clean: 249 light + 189
+  heavy = 438 pass (up from 319 pre-pass, reflecting the new tests added
+  across this and the intervening §8 pass).
 - **2026-08-12 (implemented the §8 bug-sweep findings)**: §8's 5 findings
   were originally left documented-but-unfixed to avoid colliding with the
   in-progress performance work; asked to implement them once that settled.
