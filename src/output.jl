@@ -8,17 +8,31 @@ year. `tend` is the `NamedTuple` [`tendencies!`](@ref) returns.
 """
 function diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields::ClimateFields, state::ModelState, timestate)
     # Accumulate
-    state.Tsmn .+= surf.Ts;
-    state.Tamn .+= surf.Ta;
-    state.Tomn .+= surf.To
-    state.qmn .+= surf.q;
-    state.amn .+= tend.albedo
-    state.swmn .+= tend.SW;
-    state.lwmn .+= tend.LW_surf
-    state.qlatmn .+= tend.Q_lat;
-    state.qsensmn .+= tend.Q_sens
-    state.ftmn .+= @view fields.TF_correct[:, :, timestate.ityr]
-    state.fqmn .+= @view fields.qF_correct[:, :, timestate.ityr]
+    Tsmn = state.Tsmn; Tamn = state.Tamn; Tomn = state.Tomn; qmn = state.qmn
+    amn = state.amn; swmn = state.swmn; lwmn = state.lwmn
+    qlatmn = state.qlatmn; qsensmn = state.qsensmn
+    ftmn = state.ftmn; fqmn = state.fqmn
+    Ts = surf.Ts; Ta = surf.Ta; To = surf.To; q = surf.q
+    albedo = tend.albedo; SW = tend.SW; LW_surf = tend.LW_surf
+    Q_lat = tend.Q_lat; Q_sens = tend.Q_sens
+    TF_correct = fields.TF_correct; qF_correct = fields.qF_correct
+    ityr = timestate.ityr
+
+    @turbo for j in 1:ydim
+        for i in 1:xdim
+            Tsmn[i, j] += Ts[i, j]
+            Tamn[i, j] += Ta[i, j]
+            Tomn[i, j] += To[i, j]
+            qmn[i, j] += q[i, j]
+            amn[i, j] += albedo[i, j]
+            swmn[i, j] += SW[i, j]
+            lwmn[i, j] += LW_surf[i, j]
+            qlatmn[i, j] += Q_lat[i, j]
+            qsensmn[i, j] += Q_sens[i, j]
+            ftmn[i, j] += TF_correct[i, j, ityr]
+            fqmn[i, j] += qF_correct[i, j, ityr]
+        end
+    end
 
     if timestate.ityr == nstep_yr
         # Compute annual means
@@ -104,16 +118,18 @@ function output!(it, irec, mon, surf::SurfaceState, tend, ws::CirculationWorkspa
 end
 
 """
-    time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf, fields, state, ws, acc, timestate, cfg)
+    time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf, fields, state, ws, acc, timestate, cfg; ws_a=ws, ws_q=ws)
 
 One full model timestep: computes [`tendencies!`](@ref), integrates
 `Ts`/`Ta`/`To`/`q` forward with flux corrections applied, runs
 [`seaice!`](@ref), then dispatches to [`output!`](@ref) and
-[`diagnostics!`](@ref). Returns `(mon, irec)`.
+[`diagnostics!`](@ref). Returns `(mon, irec)`. `ws_a`/`ws_q` are forwarded to
+[`tendencies!`](@ref) - see its docstring for the opt-in threading they
+enable.
 """
 function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     fields::ClimateFields, state::ModelState, ws::CirculationWorkspace, acc::MonthlyAccumulator,
-    timestate, cfg::PhysicsConfig)
+    timestate, cfg::PhysicsConfig; ws_a::CirculationWorkspace=ws, ws_q::CirculationWorkspace=ws)
     # Calendar lookup
     cal = it <= max_timesteps ? calendar_lookup[it] : (
         day=mod((it - 1) ÷ ndt_days, ndays_yr) + 1,
@@ -124,7 +140,7 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     ityr = timestate.ityr
 
     # Compute tendencies
-    tend = tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
+    tend = tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg; ws_a=ws_a, ws_q=ws_q)
 
     # Correction views
     TF_corr = @view fields.TF_correct[:, :, ityr]
@@ -133,40 +149,47 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     cap_surf = fields.cap_surf
     wz_vapor = fields.wz_vapor
 
-    # Surface temperature
-    @. Ts = Ts + tend.dT_ocean + Δt * (tend.SW + tend.LW_surf - tend.LW_down +
-                                       tend.Q_lat + tend.Q_sens + TF_corr) / cap_surf
-
-    # Air temperature
-    @. Ta = Ta + tend.dTa_crcl + Δt * (tend.LW_up + tend.LW_down - tend.em *
-                                                                   tend.LW_surf + tend.Q_lat_air - tend.Q_sens) / cap_air
-
-    # Clamps
-    @. Ts = max(Ts, min_T_K)
-    @. Ta = max(Ta, min_T_K)
-
-    # Deep ocean
-    @. To = To + tend.dTo + ToF_corr
-
-    # Humidity
+    # Humidity tendency buffer selection
     dq_eva_use = tend.dq_eva
     dq_rain_use = tend.dq_rain
     dq_crcl_use = cfg.log_crcl_dmc ? tend.dq_crcl : ws.crcl
-    @. ws.temp_buf = Δt * (dq_eva_use + dq_rain_use) + dq_crcl_use + qF_corr
-    @. ws.temp_buf = ifelse(ws.temp_buf <= -q, -min_humidity_change * q, ws.temp_buf)
-    @. ws.temp_buf = ifelse(ws.temp_buf > max_humidity_change, max_humidity_change, ws.temp_buf)
-    if !cfg.log_hydro_dmc
-        fill!(ws.temp_buf, 0.0)
+    hydro_on = cfg.log_hydro_dmc ? 1.0 : 0.0
+
+    SW = tend.SW; LW_surf = tend.LW_surf; LW_down = tend.LW_down
+    Q_lat = tend.Q_lat; Q_sens = tend.Q_sens; dTa_crcl = tend.dTa_crcl
+    LW_up = tend.LW_up; em = tend.em; Q_lat_air = tend.Q_lat_air
+    dTo = tend.dTo; dT_ocean = tend.dT_ocean
+    temp_buf = ws.temp_buf; precip_out = ws.precip_out
+    evap_out = ws.evap_out; qcrcl_out = ws.qcrcl_out
+
+    # Surface/air temperature, deep ocean, and humidity update
+    @turbo for j in 1:ydim
+        for i in 1:xdim
+            Ts[i, j] = Ts[i, j] + dT_ocean[i, j] + Δt * (SW[i, j] + LW_surf[i, j] - LW_down[i, j] +
+                Q_lat[i, j] + Q_sens[i, j] + TF_corr[i, j]) / cap_surf[i, j]
+            Ta[i, j] = Ta[i, j] + dTa_crcl[i, j] + Δt * (LW_up[i, j] + LW_down[i, j] -
+                em[i, j] * LW_surf[i, j] + Q_lat_air[i, j] - Q_sens[i, j]) / cap_air
+
+            Ts[i, j] = max(Ts[i, j], min_T_K)
+            Ta[i, j] = max(Ta[i, j], min_T_K)
+
+            To[i, j] = To[i, j] + dTo[i, j] + ToF_corr[i, j]
+
+            tb = Δt * (dq_eva_use[i, j] + dq_rain_use[i, j]) + dq_crcl_use[i, j] + qF_corr[i, j]
+            tb = ifelse(tb <= -q[i, j], -min_humidity_change * q[i, j], tb)
+            tb = ifelse(tb > max_humidity_change, max_humidity_change, tb)
+            tb = hydro_on * tb
+            temp_buf[i, j] = tb
+            q[i, j] = q[i, j] + tb
+
+            precip_out[i, j] = (-dq_rain_use[i, j]) * wz_vapor[i, j] * conv_factor
+            evap_out[i, j] = dq_eva_use[i, j] * wz_vapor[i, j] * conv_factor
+            qcrcl_out[i, j] = dq_crcl_use[i, j]
+        end
     end
-    @. q = q + ws.temp_buf
 
     # Sea ice heat capacity
     seaice!(Ts, fields, timestate, cfg)
-
-    # Conversion to mm/day (analysis units)
-    @. ws.precip_out = (-dq_rain_use) * wz_vapor * conv_factor
-    @. ws.evap_out = dq_eva_use * wz_vapor * conv_factor
-    @. ws.qcrcl_out = dq_crcl_use
 
 
     # Output and diagnostics

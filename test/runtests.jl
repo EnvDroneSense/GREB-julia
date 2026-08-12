@@ -8,7 +8,14 @@ using Test
 
 const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
 
-@testset "GREB.jl" begin
+# The 24 testsets below are split into two groups so CI can shard them across
+# 2 parallel jobs `run_light_tests()` (17 cheap testsets) and `run_heavy_tests()` (7
+# testsets that run one or more full `greb_model!` control/scenario runs,
+# including the golden regression). `GREB_TEST_SHARD` selects which group(s)
+# run; unset (or "all") runs both, so plain `Pkg.test()`/`]test` is
+# unaffected for local use - sharding is opt-in, CI-only.
+
+function run_light_tests()
 
     @testset "grid constants" begin
         @test GREB.xdim == 96
@@ -21,7 +28,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test cfg isa PhysicsConfig
 
         for exp in (:full_model, :constant_topo, :co2_double, :co2_quadruple,
-                    :elnino, :lanina, :rcp85, :ssp119, :ssp126, :ssp245, :ssp460, 
+                    :elnino, :lanina, :rcp85, :ssp119, :ssp126, :ssp245, :ssp460,
                     :ssp585, :historical_co2)
             c = create_experiment_config(exp)
             @test c isa PhysicsConfig
@@ -289,6 +296,120 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         @test irec == 0
     end
 
+    @testset "hydro! errors on invalid log_eva" begin
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.005, GREB.xdim, GREB.ydim)
+        cfg = create_experiment_config(:full_model)
+        cfg.log_eva = 99
+        @test_throws ErrorException hydro!(Ts, q, ClimateFields(), TimeState(1, 1), cfg, CirculationWorkspace())
+    end
+
+    @testset "SWradiation! is allocation-free" begin
+        fields = ClimateFields()
+        state = ModelState()
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+        cfg = create_experiment_config(:full_model)
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        SWradiation!(Ts, fields, state, ts, cfg, ws)
+        @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) <= 64
+    end
+
+    @testset "log_hydro_dmc==false freezes humidity entirely (not just eva/rain)" begin
+        # With log_hydro_dmc off, q must never move from its initial
+        # climatological value
+        if !isdir(DATA_DIR)
+            @test_skip "greb_dataset_jld2/ not present"
+        else
+            fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
+            cfg = create_experiment_config(:full_model)
+            cfg.log_hydro_dmc = false
+            result = redirect_stdout(devnull) do
+                greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = DATA_DIR, fields = fields)
+            end
+            q_ini = fields.qclim[:, :, GREB.nstep_yr]
+            for rec in result.ctrl
+                @test all(isapprox.(rec.q, q_ini; atol = 1e-9))
+            end
+        end
+    end
+
+    @testset "read_jld2 rejects non-JLD2 input" begin
+        tmp = tempname() * ".jld2"
+        write(tmp, "not a jld2 file")
+        @test_throws Exception read_jld2(tmp)
+        rm(tmp; force = true)
+    end
+
+    @testset "load_greb_jld2!/load_flux_corrections_jld2! file-exists branches" begin
+        # Synthesize a minimal dataset matching load_greb_jld2!'s expected
+        # layout (src/io.jl) so both loaders' "file present"/"file missing"
+        # branches are exercised without the real (gitignored) dataset.
+        write2(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
+            f["data"] = fill(v, GREB.xdim, GREB.ydim); f["dim_names"] = ["lon", "lat"]
+        end)
+        write3(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
+            f["data"] = fill(v, GREB.xdim, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lon", "lat", "time"]
+        end)
+        write_solar(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
+            f["data"] = fill(v, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lat", "time"]
+        end)
+
+        tmpdir = mktempdir()
+        try
+            write2(joinpath(tmpdir, "static", "global.topography.jld2"), 1.0)
+            write2(joinpath(tmpdir, "static", "greb.glaciers.jld2"), 2.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.tsurf.1948-2007.clim.jld2"), 3.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.zonal_wind.850hpa.clim.jld2"), 4.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.meridional_wind.850hpa.clim.jld2"), 5.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.atmospheric_humidity.clim.jld2"), 6.0)
+            write3(joinpath(tmpdir, "climatology", "ncep.soil_moisture.clim.jld2"), 7.0)
+            write3(joinpath(tmpdir, "climatology", "isccp.cloud_cover.clim.jld2"), 8.0)
+            write3(joinpath(tmpdir, "climatology", "woce.ocean_mixed_layer_depth.clim.jld2"), 9.0)
+            write3(joinpath(tmpdir, "climatology", "Tocean.clim.jld2"), 10.0)
+            write3(joinpath(tmpdir, "climatology", "erainterim.omega.vertmean.clim.jld2"), 11.0)
+            write3(joinpath(tmpdir, "climatology", "erainterim.omega_std.vertmean.clim.jld2"), 12.0)
+            write3(joinpath(tmpdir, "climatology", "erainterim.windspeed.850hpa.clim.jld2"), 13.0)
+            write_solar(joinpath(tmpdir, "solar", "solar_radiation.clim.jld2"), 14.0)
+
+            # "files missing" branch: no flux-correction files present yet ->
+            # load_flux_corrections_jld2! should warn and zero-fill, not error.
+            fields_nocorr = load_greb_jld2!(tmpdir; dataset = :ncep)
+            @test all(==(0.0), fields_nocorr.TF_correct)
+            @test all(==(0.0), fields_nocorr.qF_correct)
+            @test all(==(0.0), fields_nocorr.ToF_correct)
+            @test all(==(3.0), fields_nocorr.Tclim)  # loader itself still worked
+
+            # "files present" branch: add the combined flux-correction file and reload.
+            mkpath(joinpath(tmpdir, "climatology"))
+            GREB.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
+                f["Tsurf_flux_correction"] = fill(15.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                f["vapour_flux_correction"] = fill(16.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                f["Tocean_flux_correction"] = fill(17.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+            end
+
+            fields = load_greb_jld2!(tmpdir; dataset = :ncep)
+            @test all(==(1.0), fields.z_topo)
+            @test all(==(2.0), fields.glacier)
+            @test all(==(3.0), fields.Tclim)
+            @test all(==(4.0), fields.uclim)
+            @test all(==(14.0), fields.sw_solar)
+            @test all(==(15.0), fields.TF_correct)
+            @test all(==(16.0), fields.qF_correct)
+            @test all(==(17.0), fields.ToF_correct)
+        finally
+            rm(tmpdir; recursive = true, force = true)
+        end
+
+        missing_parent = mktempdir()
+        @test_throws ErrorException load_greb_jld2!(joinpath(missing_parent, "nonexistent"))
+        rm(missing_parent; recursive = true, force = true)
+    end
+
+end
+
+function run_heavy_tests()
+
     @testset "greb_model! baseline: default config runs to completion with the right output shape" begin
         cfg = create_experiment_config(:full_model)
         result = redirect_stdout(devnull) do
@@ -313,25 +434,6 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             end
             @test length(result.ctrl) == 12
         end
-    end
-
-    @testset "hydro! errors on invalid log_eva" begin
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        q = fill(0.005, GREB.xdim, GREB.ydim)
-        cfg = create_experiment_config(:full_model)
-        cfg.log_eva = 99
-        @test_throws ErrorException hydro!(Ts, q, ClimateFields(), TimeState(1, 1), cfg, CirculationWorkspace())
-    end
-
-    @testset "SWradiation! is allocation-free" begin
-        fields = ClimateFields()
-        state = ModelState()
-        ts = TimeState(1, 1)
-        ws = CirculationWorkspace()
-        cfg = create_experiment_config(:full_model)
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        SWradiation!(Ts, fields, state, ts, cfg, ws)
-        @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) <= 64
     end
 
     @testset "qflux_correction! pulls Ts/To/q to climatology; Ta gets no correction (matches Fortran)" begin
@@ -393,7 +495,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             @test length(captured.result.scnr) == 12
             # Confirm the swap branch actually ran (fields are all-zero in
             # this test env, so asserting on Ts/anomaly magnitude would be
-            # fragile — several other tests in this suite hit NaN for the
+            # fragile - several other tests in this suite hit NaN for the
             # same reason and only check shape/completion instead).
             @test occursin("loading alternate solar forcing", captured.text)
 
@@ -491,7 +593,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         end
 
         # :paleo_solar_modern_co2/:obliquity/:eccentricity swap in a real
-        # solar_scenarios/*.jld2 table at scenario start — synthesize a
+        # solar_scenarios/*.jld2 table at scenario start - synthesize a
         # minimal set so these three are reachable without the real dataset.
         tmpdir = mktempdir()
         try
@@ -560,7 +662,7 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             @test all(==(6.0), fields.wsclim_anom_cc)
 
             # init_model! applies the anomaly on top of the (here all-zero)
-            # base climatology — Tclim must reflect it, not stay at zero.
+            # base climatology - Tclim must reflect it, not stay at zero.
             redirect_stdout(devnull) do
                 init_model!(cfg, fields)
             end
@@ -593,25 +695,6 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
             @test_throws ErrorException load_cc_anomaly_jld2!(tmpdir_anom, ClimateFields(), cfg)
         finally
             rm(tmpdir_anom; recursive = true, force = true)
-        end
-    end
-
-    @testset "log_hydro_dmc==false freezes humidity entirely (not just eva/rain)" begin
-        # With log_hydro_dmc off, q must never move from its initial
-        # climatological value
-        if !isdir(DATA_DIR)
-            @test_skip "greb_dataset_jld2/ not present"
-        else
-            fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
-            cfg = create_experiment_config(:full_model)
-            cfg.log_hydro_dmc = false
-            result = redirect_stdout(devnull) do
-                greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = DATA_DIR, fields = fields)
-            end
-            q_ini = fields.qclim[:, :, GREB.nstep_yr]
-            for rec in result.ctrl
-                @test all(isapprox.(rec.q, q_ini; atol = 1e-9))
-            end
         end
     end
 
@@ -681,76 +764,10 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
         end
     end
 
-    @testset "read_jld2 rejects non-JLD2 input" begin
-        tmp = tempname() * ".jld2"
-        write(tmp, "not a jld2 file")
-        @test_throws Exception read_jld2(tmp)
-        rm(tmp; force = true)
-    end
+end
 
-    @testset "load_greb_jld2!/load_flux_corrections_jld2! file-exists branches" begin
-        # Synthesize a minimal dataset matching load_greb_jld2!'s expected
-        # layout (src/io.jl) so both loaders' "file present"/"file missing"
-        # branches are exercised without the real (gitignored) dataset.
-        write2(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
-            f["data"] = fill(v, GREB.xdim, GREB.ydim); f["dim_names"] = ["lon", "lat"]
-        end)
-        write3(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
-            f["data"] = fill(v, GREB.xdim, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lon", "lat", "time"]
-        end)
-        write_solar(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
-            f["data"] = fill(v, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lat", "time"]
-        end)
-
-        tmpdir = mktempdir()
-        try
-            write2(joinpath(tmpdir, "static", "global.topography.jld2"), 1.0)
-            write2(joinpath(tmpdir, "static", "greb.glaciers.jld2"), 2.0)
-            write3(joinpath(tmpdir, "climatology", "ncep.tsurf.1948-2007.clim.jld2"), 3.0)
-            write3(joinpath(tmpdir, "climatology", "ncep.zonal_wind.850hpa.clim.jld2"), 4.0)
-            write3(joinpath(tmpdir, "climatology", "ncep.meridional_wind.850hpa.clim.jld2"), 5.0)
-            write3(joinpath(tmpdir, "climatology", "ncep.atmospheric_humidity.clim.jld2"), 6.0)
-            write3(joinpath(tmpdir, "climatology", "ncep.soil_moisture.clim.jld2"), 7.0)
-            write3(joinpath(tmpdir, "climatology", "isccp.cloud_cover.clim.jld2"), 8.0)
-            write3(joinpath(tmpdir, "climatology", "woce.ocean_mixed_layer_depth.clim.jld2"), 9.0)
-            write3(joinpath(tmpdir, "climatology", "Tocean.clim.jld2"), 10.0)
-            write3(joinpath(tmpdir, "climatology", "erainterim.omega.vertmean.clim.jld2"), 11.0)
-            write3(joinpath(tmpdir, "climatology", "erainterim.omega_std.vertmean.clim.jld2"), 12.0)
-            write3(joinpath(tmpdir, "climatology", "erainterim.windspeed.850hpa.clim.jld2"), 13.0)
-            write_solar(joinpath(tmpdir, "solar", "solar_radiation.clim.jld2"), 14.0)
-
-            # "files missing" branch: no flux-correction files present yet ->
-            # load_flux_corrections_jld2! should warn and zero-fill, not error.
-            fields_nocorr = load_greb_jld2!(tmpdir; dataset = :ncep)
-            @test all(==(0.0), fields_nocorr.TF_correct)
-            @test all(==(0.0), fields_nocorr.qF_correct)
-            @test all(==(0.0), fields_nocorr.ToF_correct)
-            @test all(==(3.0), fields_nocorr.Tclim)  # loader itself still worked
-
-            # "files present" branch: add the combined flux-correction file and reload.
-            mkpath(joinpath(tmpdir, "climatology"))
-            GREB.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
-                f["Tsurf_flux_correction"] = fill(15.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-                f["vapour_flux_correction"] = fill(16.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-                f["Tocean_flux_correction"] = fill(17.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-            end
-
-            fields = load_greb_jld2!(tmpdir; dataset = :ncep)
-            @test all(==(1.0), fields.z_topo)
-            @test all(==(2.0), fields.glacier)
-            @test all(==(3.0), fields.Tclim)
-            @test all(==(4.0), fields.uclim)
-            @test all(==(14.0), fields.sw_solar)
-            @test all(==(15.0), fields.TF_correct)
-            @test all(==(16.0), fields.qF_correct)
-            @test all(==(17.0), fields.ToF_correct)
-        finally
-            rm(tmpdir; recursive = true, force = true)
-        end
-
-        missing_parent = mktempdir()
-        @test_throws ErrorException load_greb_jld2!(joinpath(missing_parent, "nonexistent"))
-        rm(missing_parent; recursive = true, force = true)
-    end
-
+shard = get(ENV, "GREB_TEST_SHARD", "all")
+@testset "GREB.jl" begin
+    shard in ("all", "light") && run_light_tests()
+    shard in ("all", "heavy") && run_heavy_tests()
 end

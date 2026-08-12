@@ -169,6 +169,185 @@ reverted after judging the Fortran value itself wasn't worth copying.
 
 ## Changelog of this document
 
+- **2026-08-12 (performance sweep: 4 more `@turbo` wins, 1 algorithmic fix,
+  2 more negative results, 3 investigated-not-implemented)**: user asked for
+  a wider sweep beyond §2.12's 4 already-landed spots, explicitly including
+  its two never-benchmarked candidates. Ran 2 parallel Explore agents across
+  all of `src/` (one for remaining per-timestep broadcast/allocation/type-
+  instability patterns, one for architecture/I-O/control-flow patterns
+  outside the inner kernels), each briefed not to re-propose anything
+  already covered as done/reverted/deferred. Combined findings → benchmarked
+  6 `@turbo` candidates + 1 algorithmic candidate with a single scratch
+  script (`bench_sweep2.jl`), same methodology as §2.12 (baseline vs.
+  explicit `@turbo` loop, correctness diff, only land real wins):
+  - **4 wins, implemented**: `diagnostics!`'s accumulate (`output.jl`,
+    57% faster, 22.65→9.75 µs), `state.jl`'s `accumulate!` (51%, 24.2→11.85
+    µs), `SWradiation!`'s remaining `a_atmos`/albedo-combine/`sw`-flux-loop
+    (38%, 5.5→3.4 µs), `qflux_correction!`'s per-timestep update (68%,
+    57.0→18.0 µs). The `qflux_correction!` correctness check first showed a
+    `NaN` — same root cause as an earlier session's gotcha: the benchmark's
+    synthetic `cap_surf` was all-zero (real `cap_surf` only gets populated
+    by `init_model!`), division by zero. Fixed by adding a nonzero offset in
+    the benchmark; re-checked clean (`1e-16`-level diffs).
+  - **2 negative results, not implemented**: `seaice!`'s trailing glacier-
+    override line (`ocean.jl:46`, single op) was flat-to-slower across
+    repeated runs (−2.5% to −47%, noise-dominated, never a real win);
+    `tendencies.jl:39`'s `Q_sens` (single op) was consistently slower
+    (−13% to −16%). Both are a 2nd/3rd instance of the already-documented
+    "single op, too small for `@turbo`'s overhead to pay off" pattern
+    (`circulation.jl:330`).
+  - **1 algorithmic fix, implemented**: `forcing()`'s `:regional_co2_ocean`/
+    `:regional_co2_land_ice` branches recomputed a *static* mask (depends
+    only on `z_topo`/`icmn_ctrl`, both fixed for the whole scenario run)
+    every scenario timestep instead of once. Not a `@turbo` candidate
+    (branchy) — fixed by guarding with `it == 1`. Measured in isolation:
+    7.65 µs baseline → 0.1 µs at `it>1` (98.7% faster), ~6ms/simulated year
+    saved for these two experiments (the mask itself is cheap; the win is
+    skipping it 729/730 times).
+  - **3 investigated, not implemented** (documented as findings, §2.14):
+    CMIP5/ENSO anomaly reload always re-reads from disk even when `fields`
+    is reused across `greb_model!` calls (real for a repeated-run/ensemble
+    use case, needs a cache-invalidation design decision — out of scope);
+    `postprocess.jl`'s runtime-`Symbol` `getfield` loop (real but dwarfed by
+    the array op it wraps at current record counts); `CirculationWorkspace()`'s
+    ~40-allocation constructor (only called 3×/run, not per-timestep —
+    negligible).
+  - Full suite (319/319, incl. golden regression and the `:regional_co2_*`
+    sweep test) verified passing after landing all 5 implemented changes.
+    Attempted an aggregate before/after 1-year timing at `-t 3` but this
+    batch's total contribution to a `:full_model`/`flux=0` run (~20ms/year,
+    estimated from the per-call numbers × 730 steps — `qflux_correction!`'s
+    and `forcing()`'s fixes don't even apply to that run at all) is smaller
+    than this machine's own run-to-run wall-clock noise (four repeated
+    timings: 1.15s/1.37s/1.41s/1.46s, a ~300ms spread) — unlike §2.11/§2.12's
+    wins, which were large enough to show up cleanly end-to-end. Reported
+    the isolated per-call microbenchmarks as the real signal instead of a
+    noisy or cherry-picked aggregate number.
+- **2026-08-12 (correction: the "-t 2, no gain past -t 4" timing below was a
+  benchmark artifact)**: the user asked directly — "did you do the 3-way
+  split and not the 2-way? would you expect it to need 3 threads?" —
+  which was the right question. Re-examined the timing script
+  (`time_1yr_after_impl.jl`) and found `deepcopy(fields)` (copying ~24 large
+  3D climatology arrays, needed because `greb_model!` mutates `fields` in
+  place) was sitting *inside* the `@elapsed` block as an argument
+  expression, adding the same large thread-count-*independent* constant to
+  every timing — which is exactly what hid the real 2-vs-3-thread
+  distinction the architecture predicts. Fixed by moving both `deepcopy`
+  calls (warm-up and timed) strictly outside their respective timed
+  regions, then re-ran `-t 1`/`-t 2`/`-t 3`/`-t 4`:
+
+  | Threads | Time | vs. `-t 1` |
+  |---|---|---|
+  | `-t 1` | 1.912s | 1× |
+  | `-t 2` | 1.363s | 1.40× |
+  | `-t 3` | **1.170s** | **1.63×** |
+  | `-t 4` | 1.294s | no further gain (within noise) |
+
+  `-t 3` *is* meaningfully faster than `-t 2` (confirming the two spawned
+  `circulation!` tasks were queuing sequentially onto the single extra
+  worker thread at `-t 2`, only truly running as 3 concurrent lanes at
+  `-t 3`+), and `-t 4` adds nothing further — the correct signature of a
+  genuine 3-way split, and the correct operational recommendation is
+  `-t 3`, not `-t 2`. Total vs. the original ~2.7s/year baseline is
+  **~2.31×** at `-t 3`, much closer to (and consistent with, modulo
+  Amdahl's-law overhead outside `tendencies!`) the ~2.8× the isolated
+  integration test below measured — the previous entry's "~1.78× total,
+  lower than the isolated test's ~2.8×" framing is superseded by this one;
+  the earlier entry is left as-is below per this document's append-only
+  convention, not edited. Full suite (319/319, incl. golden regression)
+  re-verified passing at `-t 3`.
+- **2026-08-12 (§2.11 landed for real: 3-way thread split of `tendencies!`)**:
+  implemented the benchmarked-not-implemented split from the entry below.
+  `tendencies!` (`src/tendencies.jl`) gained `ws_a`/`ws_q` keyword args
+  (default `=ws`, so every existing call site keeps its exact sequential
+  behavior); when a caller passes distinct workspaces *and*
+  `Threads.nthreads() > 1`, the two `circulation!` calls run via
+  `Threads.@spawn` while `SW`/`LW`/`Q_sens`/`hydro!`/`deep_ocean!` run on the
+  main `ws`. `time_loop!` (`src/output.jl`) and `qflux_correction!`
+  (`src/model.jl`) forward the same kwargs; `greb_model!` is the only call
+  site that actually opts in, allocating `ws_a`/`ws_q` once alongside `ws`.
+  Full suite (319/319, including golden regression) passes unchanged at
+  `-t 1` and at `-t 2` (parallel path actually exercised — confirmed via a
+  direct `include("test/runtests.jl")` at `-t 2`, 1m42s vs. 2m49s at `-t 1`,
+  itself a real-world echo of the win below). Real 1-year `greb_model!`
+  timing (turbo fixes from the entry below already included in both):
+  `-t 1` 2.212s → `-t 2` 1.513s (**1.46×** from threading alone on top of
+  turbo's already-landed ~1.22×; **~1.78×** vs. the original ~2.7s/year
+  baseline). `-t 4` gives no further gain (1.559s, within noise of `-t 2`) —
+  expected, only 2 concurrent `circulation!` tasks exist. This real,
+  full-pipeline number is lower than the ~2.8× from the isolated integration
+  test below: that test measured `tendencies!`+`time_loop!`'s hot loop in
+  isolation, while `greb_model!`'s ~2.7s/year baseline also includes
+  `output!`/`diagnostics!`/JLD2-adjacent bookkeeping that this change doesn't
+  touch — consistent with Amdahl's law given tendencies!'s ~70-75% share
+  (§2.10). Measured, not re-estimated, so this number supersedes the
+  integration test's for planning purposes.
+- **2026-08-12 (§3.0 landed: test suite sharding)**: split
+  `test/runtests.jl`'s 24 testsets into `run_light_tests()` (17) and
+  `run_heavy_tests()` (7, incl. golden regression), matching the boundary
+  already benchmarked in §3.0 below. Gated by `GREB_TEST_SHARD`
+  (`"all"`/`"light"`/`"heavy"`, default `"all"`) so plain `Pkg.test()`/`]test`
+  is unaffected. `.github/workflows/ci.yml` gained a `shard: [light, heavy]`
+  matrix axis crossed with the existing `julia-version`/`os` axes, setting
+  `GREB_TEST_SHARD` as a step env var. Verified locally: light shard 142
+  tests, heavy shard 177 tests, 142+177=319 matches the unsharded total
+  exactly; both shards pass independently.
+- **2026-08-12 (§2.12 landed: 4 `@turbo` fixes)**: implemented all 4 rows
+  from the table below (`diffusion!`'s mid-lat branch and `circulation!`'s
+  substep accumulate in `src/circulation.jl`; `LWradiation!` in
+  `src/physics/radiation.jl`; `time_loop!`'s state update in
+  `src/output.jl`) as explicit `@turbo for j in 1:ydim; for i in 1:xdim`
+  loops, matching each one's already-benchmarked prototype. Left
+  `circulation!`'s final difference (line 330, the documented negative
+  result) as plain `@.`. `time_loop!`'s rewrite additionally had to fold in
+  two details the original prototype didn't cover: the `dq_crcl_use`
+  buffer-selection branch (kept outside the loop, unchanged) and
+  `log_hydro_dmc`'s force-zero of the humidity increment (replaced with a
+  precomputed `0.0`/`1.0` multiplier inside the loop — same result, since
+  the multiplied value is always finite). Full suite (319/319, incl. golden
+  regression against the real NCEP dataset) passes unchanged. Real 1-year
+  `greb_model!` timing: 2.7s → 2.212s, in line with the ~0.46s/year
+  predicted below.
+- **2026-08-12 (sixth Fortran audit — 3 parallel Explore agents, §8)**: a
+  fresh bug sweep requested while performance work (§2.11/§2.12) was in
+  progress elsewhere, run independently and left undone by explicit user
+  decision (documentation only, no concurrent behavioral edits). Split the
+  codebase across 3 parallel read-only Explore agents — (1)
+  `circulation.jl`/`tendencies.jl`/`state.jl`, (2)
+  `physics/{hydrology,ocean,radiation}.jl`, (3) `model.jl`/`output.jl`/
+  `postprocess.jl`/`io.jl`/`config.jl`/`constants.jl` — each briefed on all
+  18 previously-fixed bugs (this document's §0/changelog) so they wouldn't
+  re-report known issues, and each instructed to verify every claim by
+  reading both the Julia and Fortran text directly rather than from memory.
+  Every finding the agents returned was then independently re-verified a
+  second time by directly reading the cited Fortran lines myself before
+  being kept — consistent with this codebase's established practice (see
+  the fifth-pass entry below, "5 of 8 independently re-verified"). 5 new
+  findings confirmed and documented in §8, none fixed:
+  - `forcing()`'s regional-CO₂ ice mask reads only January's `icmn_ctrl`
+    slice instead of the Fortran-mandated 12-month average
+    (`greb.model.mscm.f90:1279-1283`).
+  - `hydro!`'s `log_eva==1` branch is missing a `+2.0²`/`+3.0²` gust
+    carryover that Fortran's shared `abswind` variable picks up before the
+    `log_eva` dispatch even starts (`greb.model.mscm.f90:710-712,727-728`)
+    — distinct from the already-investigated-and-kept `144.0` vs `144.**2`
+    magnitude question in §0's "Investigated, not changed" note.
+  - `hydro!` has a second, spurious `-0.9*q/Δt` clamp on `dq_rain` alone
+    with no Fortran counterpart, duplicating/interfering with the already-
+    correct combined-`dq` clamp in `output.jl` (the §0.18 fix) at an
+    earlier, wrong point in the pipeline.
+  - The control-run climatology baseline (`ctrl_output` → `build_monthly_
+    climatology`/`compute_annual_ice_climatology`) averages every control
+    year, where Fortran's `output` subroutine only ever retains the final
+    control year (`it/ndt_days > 365*(time_ctrl-1)`,
+    `greb.model.mscm.f90:1422-1446`) — silently correct only when
+    `RunSpec.ctrl==1`, silently wrong for any multi-year control run (the
+    norm in every real Fortran run script).
+  - The flux-correction spin-up's "load precomputed files" branch
+    (`model.jl:281-290`) is dead code: the unconditional `qflux_correction!`
+    call right after it always overwrites whatever was just loaded, where
+    Fortran's equivalent dispatch is a mutually exclusive
+    load-or-compute-or-zero (`greb.model.mscm.f90:357-390`).
 - **2026-08-12 (§2.11+§2.12 combined, integration-tested)**: built a full
   1-year control-run integration test combining the 3-way thread split with
   3 of the 4 turbo fixes, to check they don't interfere. Result: ~2.8×

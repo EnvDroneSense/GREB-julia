@@ -60,10 +60,12 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
             end
         else
             # Mid‑latitudes: no precomputation possible (depends on k‑1, k+1)
-            @views @. ws.dX_diff[:, k] += wz[:, k] * ccy * (
-                wz[:, k-1] * (T1[:, k-1] - T1[:, k]) +
-                wz[:, k+1] * (T1[:, k+1] - T1[:, k])
-            )
+            @turbo for i in 1:xdim
+                ws.dX_diff[i, k] += wz[i, k] * ccy * (
+                    wz[i, k-1] * (T1[i, k-1] - T1[i, k]) +
+                    wz[i, k+1] * (T1[i, k+1] - T1[i, k])
+                )
+            end
         end
 
         # ----- Zonal diffusion -----
@@ -323,7 +325,11 @@ function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::Circulatio
         do_adv_h && advection!(ws.X_work, h_scl, fields, ws, timestate, cfg)
         do_conv && convergence!(ws.X_work, fields, timestate, ws)
 
-        @. ws.X_work += ws.dX_diff + ws.dX_adv + ws.dX_conv
+        @turbo for j in 1:ydim
+            for i in 1:xdim
+                ws.X_work[i, j] += ws.dX_diff[i, j] + ws.dX_adv[i, j] + ws.dX_conv[i, j]
+            end
+        end
     end
 
     # Final difference

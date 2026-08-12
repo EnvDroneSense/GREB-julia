@@ -196,11 +196,13 @@ Julia's default (`Base.JLOptions().cpu_target == "native"`, confirmed on
 this machine). `-ffast-math` has no Julia equivalent applied globally, but
 see §2.12 for its per-kernel impact where it'd actually matter.
 
-### 2.12 Missing `@turbo` spots — measured across 4 candidates, not implemented
-Every hot kernel in `circulation.jl`/`hydrology.jl`/`ocean.jl` uses `@turbo`
-except a handful of plain-`@.`-broadcast spots. Checked whether the same fix
-generalizes, prioritizing by call frequency (per-substep code compounds:
-`circulation!` runs 24 substeps × 2 fields = 48×/main-timestep):
+### 2.12 Missing `@turbo` spots — ✅ done (4 of 4 candidates)
+Every hot kernel in `circulation.jl`/`hydrology.jl`/`ocean.jl` uses `@turbo`.
+The 4 candidates below (all rewritten as explicit `@turbo` loops) were found
+by checking whether `LWradiation!`'s fix generalizes, prioritizing by call
+frequency (per-substep code compounds: `circulation!` runs 24 substeps × 2
+fields = 48×/main-timestep). Verified against the full test suite (incl.
+golden regression); real 1-year `greb_model!` run: 2.7s → 2.212s.
 
 | Spot | Frequency | Baseline | `@turbo` | Speedup | ~Saved/year |
 |---|---|---|---|---|---|
@@ -227,14 +229,82 @@ clear that bar; this one line doesn't. `@fastmath` (tested only on
 `LWradiation!`, 45% faster there) is the softer middle option when a spot is
 too awkward to rewrite as an explicit `@turbo` loop.
 
-Not benchmarked but plausible same-scale candidates for later: `state.jl:
-206-218`'s per-timestep monthly accumulation (9 elementwise adds, runs every
-step) and `SWradiation!`'s remaining combine/flux lines
-(`radiation.jl:59,66`). None of these are implemented — real, safe wins
-whenever someone next touches this code, alongside §2.11's larger threading
-opportunity.
+**Follow-up sweep (2026-08-12), 4 more confirmed wins + 1 more negative
+result** — a broader pass (2 parallel Explore agents across all of `src/`)
+resolved the two candidates above and found 3 more of the same shape:
 
-### 2.11 Parallelize `tendencies!`'s independent stages — benchmarked, not yet wired in
+| Spot | Baseline | `@turbo` | Speedup |
+|---|---|---|---|
+| `diagnostics!` accumulate (`output.jl:11-21`, 11 ops, 1×/step) | 22.65 µs | 9.75 µs | 57% |
+| `state.jl accumulate!` (13 ops, 1×/step) | 24.2 µs | 11.85 µs | 51% |
+| `SWradiation!`'s `a_atmos`/albedo-combine/`sw`-flux-loop (1×/step) | 5.5 µs | 3.4 µs | 38% |
+| `qflux_correction!`'s per-timestep update (12 ops, spin-up only) | 57.0 µs | 18.0 µs | 68% |
+
+All four **implemented** (`output.jl`, `state.jl`, `radiation.jl`,
+`model.jl`), verified numerically identical (diffs `1e-16`ish) and against
+the full test suite incl. golden regression. Combined contribution to a
+real `:full_model` `flux=0` run is small — the first 3 apply there (~20ms/
+simulated year estimated from the per-call numbers × 730 steps); the 4th
+only runs during the flux-correction spin-up (`run.flux > 0`, off by
+default) so it contributes nothing to that particular run. This ~20ms/year
+is genuine but small enough to be swamped by this machine's own run-to-run
+wall-clock noise (~300ms swings observed across repeated 1-year timings) —
+unlike §2.11/§2.12's fixes, which were large enough to show up cleanly
+end-to-end, this batch's win is only visible in the isolated per-call
+microbenchmarks above, not in an aggregate before/after timing. Documented
+honestly rather than reporting a noisy or cherry-picked aggregate number.
+
+**One more confirmed negative result**: `seaice!`'s trailing glacier-override
+line (`ocean.jl:46`, single op) was flat-to-slower under `@turbo` (−2.5% to
+−47% across repeated runs, i.e. noise-dominated but never a real win) —
+**not implemented**, a second instance of the same "too small/infrequent"
+pattern as `circulation.jl:330`. `tendencies.jl:39`'s `Q_sens = ct_sens *
+(Ta - Ts)` (single op, 1×/step) was also consistently slower under `@turbo`
+(−13% to −16%) — **not implemented**, third instance of the pattern. Both
+below the profitability threshold: a single elementwise op over 96×48
+doesn't carry enough work to amortize `@turbo`'s own dispatch/setup cost.
+
+### 2.13 `forcing()`'s regional-CO₂ mask recomputed every scenario timestep — ✅ done
+`:regional_co2_ocean`/`:regional_co2_land_ice` (`tendencies.jl`) recomputed
+their `co2_part` mask from scratch on every scenario timestep, even though
+it depends only on `z_topo` and `icmn_ctrl` — both fixed for the whole
+scenario run. Not a `@turbo` candidate (branchy, not a clean elementwise
+op) — fixed algorithmically by guarding the mask computation with `it ==
+1`; `fields.co2_part` correctly holds the static mask for every later
+timestep since nothing else touches it for these two experiments. Measured
+in isolation (`forcing()` called directly, `:regional_co2_ocean`): 7.65 µs
+baseline → 8.35 µs at `it==1` (pays the real cost once) → **0.1 µs at
+`it>1`** (98.7% faster) — ~6ms/simulated year saved for these two
+experiments (small in absolute terms, since the mask itself is cheap; the
+point is skipping it 729/730 times per year is free). Verified via the full
+test suite's `"greb_model! reaches every :experiment symbol..."` test,
+which exercises both experiments directly.
+
+### 2.14 Other sweep findings — investigated, not implemented
+A wider pass (2026-08-12) also looked beyond `@turbo` candidates, at
+architecture/I-O patterns:
+- **CMIP5/ENSO anomaly reload** (`model.jl`'s `greb_model!`,
+  `load_cc_anomaly_jld2!`/`load_enso_anomaly_jld2!`): always re-reads from
+  disk even when the same `fields` is reused across multiple `greb_model!`
+  calls with the same experiment — real for a repeated-run/ensemble use
+  case, but a safe fix needs a cache-key/invalidation design (what if
+  `jld2_dir`/`cfg` differs between calls?) that's a genuine design decision,
+  not a quick win — left for whoever actually hits this in an ensemble
+  workflow.
+- **`postprocess.jl`'s runtime-`Symbol` `getfield` loop**
+  (`build_monthly_climatology`/`apply_scenario_anomalies`): a real dynamic
+  dispatch per field per record, but dwarfed by the ~4608-element array op
+  it wraps at current `MonthlyRecord` counts (12×`time_ctrl`/`time_scnr`) —
+  not worth an `@generated`/`Val`-based rewrite at this scale.
+- **`CirculationWorkspace()`'s ~40 separate allocations**: only happens 3×
+  per `greb_model!` call (`ws`/`ws_a`/`ws_q`), not per-timestep — negligible
+  (~1.44 MiB, low-µs) next to a multi-second run; consolidating into fewer
+  larger arrays would save allocation count but not meaningfully change
+  wall-clock time for the current usage pattern, and would hurt readability
+  for no real gain absent a hypothetical high-frequency-construction use
+  case that doesn't currently exist in this codebase.
+
+### 2.11 Parallelize `tendencies!`'s independent stages — ✅ done
 All six stages (`SW`/`LW`/`hydro`/`deep_ocean`/`circulation!(Ta)`/
 `circulation!(q)`) read only pre-timestep state and write disjoint buffers,
 except the two `circulation!` calls which need separate workspace instances.
@@ -249,9 +319,40 @@ except the two `circulation!` calls which need separate workspace instances.
 Bare `Threads.@spawn`+`wait` overhead (~19.4 µs) exceeds several stages'
 own cost, so spawning all 6 individually is a net loss. The 3-way split
 captures the full ceiling at 2.0× (~1.0s/simulated year), verified
-bit-identical vs. sequential. **Not yet implemented in `tendencies.jl`** —
-requires `-t 2`+, pending a decision on the `-t 1`-default compatibility
-tradeoff.
+bit-identical vs. sequential.
+
+**Implemented** in `tendencies!` (`src/tendencies.jl`): `ws_a`/`ws_q`
+keyword args (default `=ws`, i.e. sequential — strictly opt-in), gated on
+`Threads.nthreads() > 1 && ws_a !== ws_q`. `time_loop!`/`qflux_correction!`
+forward the same kwargs; `greb_model!` is the only call site that allocates
+distinct `ws_a`/`ws_q` and thus actually parallelizes. Verified: full suite
+(319/319, incl. golden regression) passes unchanged at `-t 1`/`-t 2`/`-t 3`.
+
+**Needs `-t 3`, not `-t 2`, to realize the full ceiling** — this is a true
+3-lane split (`circulation!(Ta)` \| `circulation!(q)` \| rest), and with
+only 2 OS threads the two spawned circulation tasks queue onto the single
+non-main worker thread and run *sequentially* there, overlapping with "rest"
+on the main thread but not with each other. Real 1-year `greb_model!`
+timing (§2.12's turbo fixes already included in every number; `deepcopy`
+of the large climatology arrays kept strictly outside every timed region —
+an earlier pass of this benchmark hid this exact 2-vs-3-thread distinction
+by leaving `deepcopy` inside the timed block, diluting the real
+per-thread-count differences with a large constant):
+
+| Threads | Time | vs. `-t 1` |
+|---|---|---|
+| `-t 1` | 1.912s | 1× |
+| `-t 2` | 1.363s | 1.40× |
+| **`-t 3`** | **1.170s** | **1.63×** |
+| `-t 4` | 1.294s | no further gain (within noise) |
+
+`-t 3` is the minimum thread count that gives the full benefit — `-t 4`+
+adds nothing further since only 3 concurrent pieces of work exist per
+timestep. **~2.31× total** vs. the original ~2.7s/year baseline at `-t 3`,
+consistent with (slightly under) the ~2.8× the isolated integration test
+below measured, the remaining gap being `output!`/`diagnostics!`/
+bookkeeping outside `tendencies!` that this change doesn't touch (Amdahl's
+law, given `tendencies!`'s ~70–75% share, §2.10).
 
 Other identified, unimplemented opportunities (not benchmarked further):
 ensemble/parameter-sweep parallelism via `Threads`/`Distributed`/GPU arrays
@@ -261,15 +362,16 @@ multiple dispatch (the physics kernels have no hardcoded `Float64`, only
 `CirculationWorkspace`'s fields do, per §2.3); AD-based calibration via
 `Enzyme.jl`/`ForwardDiff.jl` for gradient-based parameter tuning.
 
-**Combined with §2.12's turbo fixes and integration-tested over a full
-1-year run: ~2.8× (2.83–2.88s → 1.00–1.04s), better than either alone —
-they compose rather than interfere. Output verified bit-identical (mod.
-float noise) against both the golden-regression reference and a fresh
-baseline run. One measurement gotcha caught along the way: the first,
-un-warmed-up timing showed the combo 2.5× *slower*, purely because its new
-functions hadn't been JIT-compiled yet (unlike `greb_model!`'s
-`PrecompileTools`-baked ones) — resolved with a warm-up call; a real
-implementation would need this folded into `@compile_workload`.**
+**Pre-implementation integration test** (kept for methodology reference):
+combining the 3-way split with §2.12's turbo fixes in an isolated
+`tendencies!`+`time_loop!` harness measured ~2.8× (2.83–2.88s →
+1.00–1.04s) — higher than the ~1.78× (2.7s → 1.513s) the real
+`greb_model!` shows post-implementation, since the isolated harness doesn't
+carry `output!`/`diagnostics!`/bookkeeping overhead. One measurement gotcha
+caught along the way, since fixed in the real implementation too: the
+first, un-warmed-up timing showed the combo 2.5× *slower*, purely because
+its new functions hadn't been JIT-compiled yet (unlike `greb_model!`'s
+`PrecompileTools`-baked ones) — resolved with a warm-up call before timing.
 
 ---
 
@@ -297,7 +399,7 @@ implementation would need this folded into `@compile_workload`.**
   tests; both JLD2 loaders' "file present" branches covered via synthetic
   `mktempdir`+`jldopen` datasets.
 
-### 3.0 Parallelizing the test suite across processes — benchmarked, not implemented
+### 3.0 Parallelizing the test suite across processes — ✅ done
 Splitting `runtests.jl`'s 24 testsets into 2 process-level shards (not
 `Threads.@threads` — `Test.jl`'s testset tracking isn't thread-safe) along
 an existing boundary:
@@ -311,10 +413,15 @@ an existing boundary:
 
 **1.56×** on 14 available cores — short of 2× because the split is
 unbalanced (B takes ~2× A). A rebalanced/finer split would likely get
-closer to the ceiling. Not implemented as an actual CI change (would need a
-load-balanced shard split plus a CI matrix or `ReTestItems.jl`-style
-runner) — a benchmarked, real opportunity for whoever next touches CI
-turnaround time.
+closer to the ceiling.
+
+**Implemented**: `test/runtests.jl`'s 24 testsets are now split into
+`run_light_tests()` (17) and `run_heavy_tests()` (7, incl. golden
+regression) at this exact boundary, gated by `GREB_TEST_SHARD`
+(`"all"`/`"light"`/`"heavy"`, default `"all"` — plain `Pkg.test()`/`]test`
+is unaffected). `.github/workflows/ci.yml` gained a `shard: [light, heavy]`
+matrix axis. Verified locally: 142 + 177 = 319, matching the unsharded
+total exactly; both shards pass independently.
 
 ---
 
@@ -365,12 +472,21 @@ unaffected.
 Nothing blocking. Remaining open items:
 - §4.8 (`forcing()` dispatch style) and §4.10 (CI lint/format) — both
   explicitly deferred by user decision, not forgotten.
-- Landing §2.11's benchmarked 3-way `tendencies!` parallelization, pending a
-  decision on the `-t 1`-default compatibility tradeoff.
-- Landing §2.12's 4 benchmarked `@turbo` fixes (~0.46s/year combined, low
-  risk, independent of §2.11 and composes with it).
 - Ensemble/GPU parallelism and AD-based calibration (§2.11) remain
   documented ideas only, not benchmarked.
+- §2.14's 3 investigated-not-implemented findings (CMIP5/ENSO anomaly
+  reload caching, `postprocess.jl`'s Symbol dispatch, `CirculationWorkspace()`
+  allocation count) — each needs a design decision or isn't worth it at
+  current scale, not quick safe wins.
+- §8's 5 newly found bugs remain documented, not fixed (explicit user
+  decision to keep that pass report-only).
+
+Landed across the last two passes: §2.12's original 4 `@turbo` fixes plus
+its 4 follow-up fixes, §2.13's `forcing()` mask-recomputation fix, §3.0's
+test-suite sharding, and §2.11's 3-way `tendencies!` thread split (needs
+`-t 3`, not `-t 2`, to realize its full ceiling — see §2.11's correction
+note) — see each section above and `CHANGELOG.md` for the real (not just
+benchmarked) numbers.
 
 > ⚠️ Every performance change must be validated against a reference run —
 > "faster" only counts if output is unchanged within tolerance. Every
@@ -477,3 +593,93 @@ discovery already handles the real file set correctly);
 regional CO2 experiments' dynamic-vs-static mask asymmetry between the two
 halves of the family (both paths produce correct masks, architectural note
 only).
+
+---
+
+## 8. Newly found bugs (2026-08-12 sweep) — documented, not yet fixed
+
+A fresh Fortran-vs-Julia audit, run in parallel with in-progress performance
+work (§2.11). **Left unfixed by explicit user decision**, to avoid
+behavioral edits landing concurrently with the performance changes — this
+section is a punch list for a future pass. Every finding below was verified
+directly against `greb.model.mscm.f90`, not just relayed from the discovery
+tool. Full method: `CHANGELOG.md`.
+
+### 8.1 `forcing()`'s regional-CO₂ ice mask uses only January, not the annual mean
+`tendencies.jl:200,216` (`:regional_co2_ocean`/`:regional_co2_land_ice`) take
+`icmn_ctrl[:, :, 1]` — January's ice cover only. Fortran
+(`greb.model.mscm.f90:1279-1283`) averages `icmn_ctrl` across all 12 months
+before thresholding at `:1331,:1335`. Any grid cell whose January ice cover
+disagrees with its annual mean relative to the 0.5 threshold gets the wrong
+`co2_part` override in these two experiments. **Confidence: high.**
+**Suggested fix**: average `icmn_ctrl` over its third dimension before use,
+matching `greb.model.mscm.f90:1279-1283`.
+
+### 8.2 `hydro!`'s `log_eva==1` branch drops a carried-over base gust term
+`physics/hydrology.jl:101-113`. Fortran's `abswind` already carries
+`+2.0²` (land)/`+3.0²` (ocean) into the `log_eva` dispatch
+(`greb.model.mscm.f90:710-712`); the `log_eva==1` branch (`:727-728`) adds
+its own `144.²`/`7.1²` *on top of* that already-modified variable, so the
+true combined constant is `4+144²` land, `9+50.41` ocean. Julia recomputes
+wind from scratch and adds only `144.0`/`50.41`, missing the `+4`/`+9`.
+Affects evaporation wind speed (and therefore `Q_lat`/`dq_eva`) at every
+grid point, every timestep `cfg.log_eva == 1` is active; `log_eva ∈
+{-1,0,2}` are unaffected (they fully reset/overwrite `abswind`).
+**Confidence: medium-high.** **Suggested fix**: add `4.0`/`9.0` to
+`gust_land_1`/`gust_ocean_1` (i.e. `148.0`/`59.41`), or restructure to match
+Fortran's two-stage `abswind` computation exactly.
+
+### 8.3 `hydro!` applies a spurious extra clamp to `dq_rain` alone
+`physics/hydrology.jl:150-153` clamps `dq_rain` to `-0.9*q/Δt` inside
+`hydro!`. Fortran's `hydro` subroutine (`greb.model.mscm.f90:687-761`) has
+no such clamp — the real Fortran clamp (`:481-483`) applies once, in
+`time_loop`, to the *combined* post-`dt` total
+`dq = Δt*(dq_eva+dq_rain) + dq_crcl + qF_correct`, which Julia already
+implements correctly and separately in `output.jl:163-164` (the §0.18 fix).
+This extra clause pre-truncates `dq_rain` in isolation — different formula,
+different point in the pipeline — before that correct clamp runs, and feeds
+the truncated value into `Q_lat_air`. Affects the precipitation diagnostic
+and atmospheric latent-heat coupling whenever the raw `dq_rain` regression
+predicts a very large fractional humidity loss (dry regions/seasons).
+**Confidence: high.** **Suggested fix**: delete lines 151-152 in
+`hydro!` (the `min_dq`/clamp lines); leave the combined-`dq` clamp in
+`output.jl` as the sole clamp, matching Fortran.
+
+### 8.4 Control-run climatology baseline averages every control year instead of only the final year
+`model.jl:308-321` (`ctrl_output`) accumulates a `MonthlyRecord` for every
+month of every control year; `build_monthly_climatology`/
+`compute_annual_ice_climatology` (`postprocess.jl:7-41,72-89`) then average
+across the *entire* vector. Fortran's `output` subroutine
+(`greb.model.mscm.f90:1422-1446`) only assigns into
+`Tmn_ctrl`/`icmn_ctrl`/etc. when `it/ndt_days > 365*(time_ctrl-1)` — i.e.
+only the **final** control year; every earlier year's accumulator is
+computed then discarded. This is a straight per-month assignment from the
+last year, not a multi-year average. Every real Fortran run script uses
+`time_ctrl` of 3 or 50 years (never 1), so this diverges from the reference
+whenever `RunSpec.ctrl > 1` — only the Julia default (`ctrl=1`) happens to
+make the two schemes coincide. Affects every scenario anomaly
+(`apply_scenario_anomalies`) and the regional-CO2
+land/ocean/tropics/extratropics experiments' `ice_forcing`. **Confidence:
+high.** **Suggested fix**: in `build_monthly_climatology`/
+`compute_annual_ice_climatology`, use only the final 12 records of
+`ctrl_output` (or restructure `greb_model!` to only retain the last control
+year), matching Fortran's `it/ndt_days > 365*(time_ctrl-1)` gate.
+
+### 8.5 Flux-correction spin-up loads precomputed files, then immediately overwrites them
+`model.jl:281-290`: when `!cfg.log_topo_drsp && cfg.log_qflux_dmc`, Julia
+calls `load_flux_corrections_jld2!` and then unconditionally calls
+`qflux_correction!` right after, which recomputes and overwrites the exact
+same `fields.TF_correct`/`qF_correct`/`ToF_correct` arrays
+(`model.jl:182` et al.) — the load has zero effect on the run, despite
+printing "% loading flux correction fields...". Fortran's equivalent
+(`greb.model.mscm.f90:357-390`) is a mutually exclusive `if/elseif/else`:
+compute fresh **or** read precomputed files **or** zero — never both.
+This is dead code regardless of the separate, lower-confidence question of
+whether `log_topo_drsp`/`log_qflux_dmc` are even the right switches for
+this gate — Fortran's real gate is `log_exp`, and that mismap entangles
+with the already-documented §7.3 finding about `_dmc`/`_drsp` families
+lacking a combined preset (not re-litigated here). **Confidence: high** on
+the dead-code overwrite itself; **medium** on the switch-mapping root
+cause. **Suggested fix**: make the load and the fresh-computation branches
+mutually exclusive (`if`/`elseif`/`else`, not `if` + unconditional call
+after), matching Fortran's structure at `greb.model.mscm.f90:357-390`.
