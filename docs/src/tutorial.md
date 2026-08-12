@@ -30,6 +30,8 @@ cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85,
 
 `cfg` is a mutable struct — override individual switches after construction,
 e.g. `cfg.log_rain = 1` to pick a different hydrology parameterization.
+See the [Physics Switches](@ref) page for the full list of switches and
+what each one controls.
 
 ## 3. Run the model
 

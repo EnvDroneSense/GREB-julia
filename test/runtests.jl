@@ -28,14 +28,47 @@ function run_light_tests()
         @test cfg isa PhysicsConfig
 
         for exp in (:full_model, :constant_topo, :co2_double, :co2_quadruple,
-                    :elnino, :lanina, :rcp85, :ssp119, :ssp126, :ssp245, :ssp460,
-                    :ssp585, :historical_co2)
+                    :elnino, :lanina, :rcp26, :rcp45, :rcp60, :rcp85, :ssp119,
+                    :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2,
+                    :decon_mean_climate, :decon_2xco2)
             c = create_experiment_config(exp)
             @test c isa PhysicsConfig
             @test c.experiment == exp
         end
 
         @test create_experiment_config(:co2_double).co2_concentration == 680.0
+    end
+
+    @testset "create_experiment_config: :custom_co2 and decon presets (§7.2/§7.3)" begin
+        cfg_custom = create_experiment_config(:custom_co2; co2_path="/tmp/my_co2.txt")
+        @test cfg_custom.experiment == :custom_co2
+        @test cfg_custom.custom_co2_path == "/tmp/my_co2.txt"
+        @test create_experiment_config(:custom_co2).custom_co2_path == ""
+
+        # decon_mean_climate: defaults all true, one override propagates
+        cfg_dmc = create_experiment_config(:decon_mean_climate)
+        for switch in (cfg_dmc.log_clouds_dmc, cfg_dmc.log_ocean_dmc, cfg_dmc.log_atmos_dmc,
+                       cfg_dmc.log_co2_dmc, cfg_dmc.log_hydro_dmc, cfg_dmc.log_qflux_dmc,
+                       cfg_dmc.log_ice, cfg_dmc.log_hdif, cfg_dmc.log_hadv,
+                       cfg_dmc.log_vdif, cfg_dmc.log_vadv)
+            @test switch == true
+        end
+        cfg_dmc_off = create_experiment_config(:decon_mean_climate; log_ocean_dmc=false)
+        @test cfg_dmc_off.log_ocean_dmc == false
+        @test cfg_dmc_off.log_clouds_dmc == true  # untouched switches stay at default
+
+        # decon_2xco2: defaults all true + doubled CO2, one override propagates
+        cfg_drsp = create_experiment_config(:decon_2xco2)
+        @test cfg_drsp.co2_concentration == 680.0
+        for switch in (cfg_drsp.log_topo_drsp, cfg_drsp.log_clouds_drsp, cfg_drsp.log_humid_drsp,
+                       cfg_drsp.log_ocean_drsp, cfg_drsp.log_hydro_drsp,
+                       cfg_drsp.log_ice, cfg_drsp.log_hdif, cfg_drsp.log_hadv,
+                       cfg_drsp.log_vdif, cfg_drsp.log_vadv)
+            @test switch == true
+        end
+        cfg_drsp_off = create_experiment_config(:decon_2xco2; log_topo_drsp=false)
+        @test cfg_drsp_off.log_topo_drsp == false
+        @test cfg_drsp_off.log_clouds_drsp == true  # untouched switches stay at default
     end
 
     @testset "set_hydrology_parameters! matches HYDRO_PARAMS for every log_rain value" begin
@@ -753,11 +786,67 @@ function run_heavy_tests()
         end
         @test length(result.scnr) == 12
 
-        # "not yet implemented" placeholders
-        for sym in (:rcp26, :rcp45, :rcp60, :custom_co2)
-            cfg = PhysicsConfig(experiment = sym)
-            @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+        # :rcp26/:rcp45/:rcp60 load a year=>CO2 table at scenario start.
+        # same mechanism as :ssp*/:historical_co2 - :rcp60's jld2 key is
+        # "rcp6", not "rcp60".
+        tmpdir_rcp = mktempdir()
+        try
+            mkpath(joinpath(tmpdir_rcp, "scenario"))
+            expected_rcp_co2 = Dict(:rcp26 => 400.0, :rcp45 => 401.0, :rcp60 => 402.0)
+            GREB.jldopen(joinpath(tmpdir_rcp, "scenario", "ipcc_scenarios.jld2"), "w") do file
+                file["scenarios"] = Dict(
+                    "rcp26" => Dict(1950 => expected_rcp_co2[:rcp26]),
+                    "rcp45" => Dict(1950 => expected_rcp_co2[:rcp45]),
+                    "rcp6" => Dict(1950 => expected_rcp_co2[:rcp60]),
+                )
+            end
+
+            for sym in (:rcp26, :rcp45, :rcp60)
+                cfg = PhysicsConfig(experiment = sym)
+                result = redirect_stdout(devnull) do
+                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_rcp)
+                end
+                @test length(result.scnr) == 12
+                @test cfg.co2_scenario == Dict(1950 => expected_rcp_co2[sym])
+            end
+        finally
+            rm(tmpdir_rcp; recursive = true, force = true)
         end
+
+        # :custom_co2 loads a plain-text "year CO2" file set on cfg.custom_co2_path (§7.2).
+        tmpdir_custom = mktempdir()
+        try
+            co2_path = joinpath(tmpdir_custom, "my_co2.txt")
+            write(co2_path, "# comment line, should be skipped\n1950 300.0\n1951 301.0\n\n")
+
+            cfg = create_experiment_config(:custom_co2; co2_path = co2_path)
+            result = redirect_stdout(devnull) do
+                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+            end
+            @test length(result.scnr) == 12
+            @test cfg.co2_scenario == Dict(1950 => 300.0, 1951 => 301.0)
+
+            # Unset custom_co2_path must raise a clear error, not silently
+            # dispatch or default.
+            cfg_unset = PhysicsConfig(experiment = :custom_co2)
+            @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg_unset; jld2_dir = "")
+        finally
+            rm(tmpdir_custom; recursive = true, force = true)
+        end
+
+        # :decon_mean_climate (control-run only) / :decon_2xco2 (scenario run)
+        # smoke tests.
+        cfg_dmc = create_experiment_config(:decon_mean_climate)
+        result_dmc = redirect_stdout(devnull) do
+            greb_model!(RunSpec(ctrl = 1, scnr = 0), cfg_dmc; jld2_dir = "")
+        end
+        @test length(result_dmc.ctrl) == 12
+
+        cfg_drsp = create_experiment_config(:decon_2xco2)
+        result_drsp = redirect_stdout(devnull) do
+            greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg_drsp; jld2_dir = "")
+        end
+        @test length(result_drsp.scnr) == 12
 
         # :ssp* experiments load a year=>CO2 table at scenario start
         tmpdir_ssp = mktempdir()

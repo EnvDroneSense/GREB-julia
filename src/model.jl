@@ -233,9 +233,9 @@ const _SOLAR_SWAP_FORCING_TYPE = Dict(
     :eccentricity => :eccentricity,
 )
 
-const _CO2_SCENARIO_SYMBOLS = (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
+const _CO2_SCENARIO_SYMBOLS = (:rcp26, :rcp45, :rcp60, :ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
 
-const _CO2_SCENARIO_KEY = Dict(:historical_co2 => :hist)
+const _CO2_SCENARIO_KEY = Dict(:historical_co2 => :hist, :rcp60 => :rcp6)
 
 """
     greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields())
@@ -347,11 +347,16 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
         fields.sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
     end
 
-    # IPCC SSP/historical experiments: load the year→CO2 lookup table
+    # IPCC RCP/SSP/historical experiments: load the year→CO2 lookup table
     if cfg.experiment in _CO2_SCENARIO_SYMBOLS
         println("% loading IPCC CO2 scenario ($(cfg.experiment))...")
         scenario_key = get(_CO2_SCENARIO_KEY, cfg.experiment, cfg.experiment)
         cfg.co2_scenario = load_co2_scenario_jld2(jld2_dir, scenario_key)
+    elseif cfg.experiment == :custom_co2
+        isempty(cfg.custom_co2_path) &&
+            error("PhysicsConfig.custom_co2_path must be set for the :custom_co2 experiment")
+        println("% loading custom CO2 scenario ($(cfg.custom_co2_path))...")
+        cfg.co2_scenario = load_custom_co2_scenario(cfg.custom_co2_path)
     end
 
     # Reset state to initial conditions

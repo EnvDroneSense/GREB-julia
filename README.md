@@ -7,7 +7,7 @@
 A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. This implementation runs in an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook with process isolation capabilities for decomposition experiments.
 
 ---
-> **Repository layout (v0.1):** GREB is now organized as a standard Julia package.
+> **Repository layout:** GREB is now organized as a standard Julia package.
 > The model code lives under `src/` (a `module GREB`, originally extracted
 > **verbatim** from the notebook and since split into topical files - see
 > `src/GREB.jl` for the include order), tests in `test/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
@@ -58,7 +58,9 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 - ⏱️ 12-hour main time steps with 30-minute sub-steps for circulation
 - 📊 Real-time visualization of climate variables
 - 🔬 Support for multiple climate datasets (NCEP, ERA-Interim)
-- 🌡️ Future climate scenarios (RCP 2.6/4.5/6.0/8.5; SSP1-1.9/1-2.6/2-4.5/4-6.0/5-8.5 - RCP8.5 and the five SSPs are implemented, the other RCPs remain "not yet implemented" placeholders) and a historical CO2 (1850–2017) hindcast (`:historical_co2`)
+- 🌡️ IPCC climate scenarios - all four RCPs and five SSPs are implemented (`:rcp26`/`:rcp45`/`:rcp60`/`:rcp85`, `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`), plus a historical CO2 (1850–2017) hindcast (`:historical_co2`) and a user-supplied CO2 trajectory (`:custom_co2`)
+- 🧩 "Deconstruct" experiments (`:decon_mean_climate`, `:decon_2xco2`) - toggle individual mean-climate/2×CO₂-response feedback processes on or off via `log_*_dmc`/`log_*_drsp` keywords passed to `create_experiment_config`
+- ⚡ Multi-threaded physics - the temperature and humidity `circulation!` calls run concurrently via `Threads.@spawn` when Julia is started with 3+ threads (e.g. `julia --project=. -t 3`)
 - ☀️ Orbital forcing and paleoclimate experiments
 
 ## 🚀 Quick Start
@@ -176,6 +178,18 @@ cfg = create_experiment_config(:full_model)   # or :co2_double, :elnino, :rcp85,
 cfg.log_rain = 1                              # override any switch after construction
 ```
 
+Advanced experiment types take extra keywords:
+
+```julia
+# User-supplied CO2 trajectory (a "year CO2" text file, same format as the
+# IPCC scenario files)
+cfg = create_experiment_config(:custom_co2; co2_path="my_co2_trajectory.txt")
+
+# Deconstruct experiments: toggle individual feedback processes off
+cfg = create_experiment_config(:decon_mean_climate; log_ocean_dmc=false)
+cfg = create_experiment_config(:decon_2xco2; log_clouds_drsp=false)
+```
+
 ### 3. Run the Model
 
 ```julia
@@ -265,11 +279,7 @@ GREB-julia/
 - Moisture transport
 - Simplified circulation patterns
 
----
-## ⚠️ Known Issues
-
-
-### Reporting Issues
+### 🐛 Reporting Issues
 
 If you encounter these or other problems:
 1. Check that all input data files are correctly formatted and located
@@ -286,7 +296,6 @@ Contributions to fix these issues are welcome! Open a pull request or an issue o
 ## 🔭 Future Plans
 
 - **NetCDF output** - optional direct‑write of monthly means 
-- **Parallelisation** - multi‑threading for longer runs  
 - **Visualisation dashboard** - embedded interactive maps and time series (similar to the [interactive database](https://mscm.dkrz.de/GREB_model.html?locale=EN) )
 - **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREB-julia/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
 - **Package registration** - formally register GREB.jl with the Julia General Registry for easy installation

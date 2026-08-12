@@ -78,10 +78,29 @@ function load_co2_scenario_jld2(jld2_dir::String, scenario::Symbol)
 end
 
 """
+    load_custom_co2_scenario(path::String) -> Dict{Int,Float64}
+
+Loads a `year => CO2` lookup table for the `:custom_co2` experiment from a
+plain-text file, one `year CO2` pair per line. Blank lines
+and lines starting with `#` are skipped.
+"""
+function load_custom_co2_scenario(path::String)
+    isfile(path) || error("Custom CO2 scenario file not found: $path")
+    table = Dict{Int,Float64}()
+    for line in eachline(path)
+        stripped = strip(line)
+        (isempty(stripped) || startswith(stripped, "#")) && continue
+        cols = split(stripped)
+        length(cols) >= 2 ||
+            error("Malformed line in custom CO2 scenario file $path: \"$line\" (expected \"year CO2\")")
+        table[parse(Int, cols[1])] = parse(Float64, cols[2])
+    end
+    return table
+end
+
+"""
 Load flux corrections from the combined `climatology/flux_corrections.jld2`
 into `fields` (zeros per-field if the file or an individual key is missing).
-All three fields are always loaded together — measured ~35% faster than 3
-separate files with no size penalty, see `claude/IMPROVEMENTS.md` §3.
 """
 function load_flux_corrections_jld2!(jld2_dir::String, fields::ClimateFields)
     correction_keys = Dict(
