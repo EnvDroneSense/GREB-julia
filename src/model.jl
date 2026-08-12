@@ -109,6 +109,10 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     @. fields.wz_air = exp(-z_topo / z_air)
     @. fields.wz_vapor = exp(-z_topo / z_vapor)
 
+    # ── hydro!'s log_rain==1 rain-limit divisor: depends only on wz_vapor,
+    # invariant for the whole run
+    @. fields.rain_limit = -0.0015 / (fields.wz_vapor * r_qviwv * 86400.0)
+
     # ── Surface heat capacity ────────────────────────────────────
     cap_surf = fields.cap_surf
     mldclim = fields.mldclim
@@ -133,7 +137,8 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
     if cfg.experiment == :a1b_scenario
         CO2_ctrl = 298.0  # A1B scenario baseline
-    elseif cfg.experiment in (:a1b_enhanced, :rcp26, :rcp45, :rcp60, :rcp85, :custom_co2)
+    elseif cfg.experiment in (:a1b_enhanced, :rcp26, :rcp45, :rcp60, :rcp85, :custom_co2,
+                               :ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
         CO2_ctrl = 280.0  # IPCC scenarios baseline
     end
 
@@ -146,21 +151,22 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 end
 
 """
-    qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields, state, timestate, cfg, ws, time_flux)
+    qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields, state, timestate, cfg, ws, time_flux; ws_a=ws, ws_q=ws)
 
 Runs `time_flux` years of `tendencies!` to derive the ocean/atmosphere flux
 corrections (`fields.TF_correct`/`qF_correct`/`ToF_correct`) that make the
 control climate match observed climatology. Mutates `Ts`/`Ta`/`q`/`To` in
-place as it integrates.
+place as it integrates. `ws_a`/`ws_q` are forwarded to [`tendencies!`](@ref)
 """
-function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace, time_flux)
+function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state::ModelState, timestate, cfg::PhysicsConfig, ws::CirculationWorkspace, time_flux;
+    ws_a::CirculationWorkspace=ws, ws_q::CirculationWorkspace=ws)
     cap_surf = fields.cap_surf
     for it in 1:(time_flux*ndt_days*ndays_yr)
         timestate.jday = mod((it - 1) ÷ ndt_days, ndays_yr) + 1
         timestate.ityr = mod(it - 1, nstep_yr) + 1
         ityr = timestate.ityr
 
-        tend = tendencies!(CO2_ctrl, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
+        tend = tendencies!(CO2_ctrl, Ts, Ta, To, q, fields, state, ws, timestate, cfg; ws_a=ws_a, ws_q=ws_q)
 
         # Views into climatology & correction fields
         Tc = @view fields.Tclim[:, :, ityr]
@@ -170,32 +176,39 @@ function qflux_correction!(CO2_ctrl, Ts, Ta, q, To, fields::ClimateFields, state
         ToFc = @view fields.ToF_correct[:, :, ityr]
         qFc = @view fields.qF_correct[:, :, ityr]
 
-        # ── Surface temperature ──────────────────────────────
-        # Uncorrected state (store in workspace buffer)
-        @. ws.Ts0_buf = Ts + tend.dT_ocean + Δt * (
-            tend.SW + tend.LW_surf - tend.LW_down +
-            tend.Q_lat + tend.Q_sens
-        ) / cap_surf
+        # Surface/air temperature, deep ocean, and humidity update.
+        Ts0_buf = ws.Ts0_buf; Ta0_buf = ws.Ta0_buf; To0_buf = ws.To0_buf; q0_buf = ws.q0_buf
+        dT_ocean = tend.dT_ocean; SW = tend.SW; LW_surf = tend.LW_surf; LW_down = tend.LW_down
+        Q_lat = tend.Q_lat; Q_sens = tend.Q_sens; dTa_crcl = tend.dTa_crcl
+        LW_up = tend.LW_up; em = tend.em; Q_lat_air = tend.Q_lat_air
+        dTo = tend.dTo; dq_crcl = tend.dq_crcl; dq_eva = tend.dq_eva; dq_rain = tend.dq_rain
 
-        # Correction and corrected state
-        @. TFc = (Tc - ws.Ts0_buf) * cap_surf / Δt
-        @. ws.Ts0_buf = ws.Ts0_buf + TFc * Δt / cap_surf
+        @turbo for j in 1:ydim
+            for i in 1:xdim
+                ts0 = Ts[i, j] + dT_ocean[i, j] + Δt * (SW[i, j] + LW_surf[i, j] - LW_down[i, j] +
+                    Q_lat[i, j] + Q_sens[i, j]) / cap_surf[i, j]
+                tfc = (Tc[i, j] - ts0) * cap_surf[i, j] / Δt
+                ts0 = ts0 + tfc * Δt / cap_surf[i, j]
+                TFc[i, j] = tfc
+                Ts0_buf[i, j] = ts0
 
-        # ── Air temperature ──────────────────────────────────
-        @. ws.Ta0_buf = Ta + tend.dTa_crcl + ΔT_AIR_FACTOR * (
-            tend.LW_up + tend.LW_down - tend.em * tend.LW_surf +
-            tend.Q_lat_air - tend.Q_sens
-        )
+                Ta0_buf[i, j] = Ta[i, j] + dTa_crcl[i, j] + ΔT_AIR_FACTOR * (
+                    LW_up[i, j] + LW_down[i, j] - em[i, j] * LW_surf[i, j] +
+                    Q_lat_air[i, j] - Q_sens[i, j])
 
-        # ── Deep ocean ───────────────────────────────────────
-        @. ws.To0_buf = To + tend.dTo
-        @. ToFc = Toc - ws.To0_buf
-        @. ws.To0_buf = ws.To0_buf + ToFc
+                to0 = To[i, j] + dTo[i, j]
+                tofc = Toc[i, j] - to0
+                to0 = to0 + tofc
+                ToFc[i, j] = tofc
+                To0_buf[i, j] = to0
 
-        # ── Humidity ─────────────────────────────────────────
-        @. ws.q0_buf = q + tend.dq_crcl + Δt * (tend.dq_eva + tend.dq_rain)
-        @. qFc = qc - ws.q0_buf
-        @. ws.q0_buf = ws.q0_buf + qFc
+                q0 = q[i, j] + dq_crcl[i, j] + Δt * (dq_eva[i, j] + dq_rain[i, j])
+                qfc = qc[i, j] - q0
+                q0 = q0 + qfc
+                qFc[i, j] = qfc
+                q0_buf[i, j] = q0
+            end
+        end
 
         # Sea ice (updates cap_surf in place)
         seaice!(ws.Ts0_buf, fields, timestate, cfg)
@@ -220,6 +233,10 @@ const _SOLAR_SWAP_FORCING_TYPE = Dict(
     :eccentricity => :eccentricity,
 )
 
+const _CO2_SCENARIO_SYMBOLS = (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
+
+const _CO2_SCENARIO_KEY = Dict(:historical_co2 => :hist)
+
 """
     greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields())
 
@@ -231,7 +248,7 @@ Run a GREB flux-correction spin-up (`run.flux` years), control run
 a fresh all-zero instance so callers that never load real data (tests,
 quick structural runs) don't need to pass anything. Pass the same `fields`
 instance across multiple calls to reuse already-loaded climatology instead
-of reloading it — that's the only case where `co2_part`/`sw_solar`
+of reloading it - that's the only case where `co2_part`/`sw_solar`
 mutations from one run could otherwise leak into the next; this function
 resets/restores them per-run regardless.
 """
@@ -244,6 +261,14 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     state = ModelState()
 
     # ── 1. Initialisation ───────────────────────────────────────
+    if cfg.experiment == :rcp85
+        load_cc_anomaly_jld2!(jld2_dir, fields, cfg)
+    elseif cfg.experiment == :elnino
+        load_enso_anomaly_jld2!(jld2_dir, fields, cfg, :elnino)
+    elseif cfg.experiment == :lanina
+        load_enso_anomaly_jld2!(jld2_dir, fields, cfg, :lanina)
+    end
+
     ini = init_model!(cfg, fields)
     Ts_ini = ini.Ts_ini;
     Ta_ini = ini.Ta_ini
@@ -255,22 +280,27 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     is_orbital_exp = cfg.experiment in (:obliquity, :eccentricity, :earth_sun_distance)
     is_forced_boundary = cfg.experiment in (:rcp85, :elnino, :lanina)
     is_sst_plus1 = cfg.experiment == :sst_plus1
+    is_historical_exp = cfg.experiment == :historical_co2
 
-    # Workspace and accumulator
+    # Workspace and accumulator. `ws_a`/`ws_q` are separate `circulation!`
+    # scratch spaces so the Ta/q circulation calls inside `tendencies!` can
+    # run concurrently on `Threads.nthreads() > 1` 
     ws = CirculationWorkspace()
+    ws_a = CirculationWorkspace()
+    ws_q = CirculationWorkspace()
     acc = MonthlyAccumulator()
 
     # Initialize time state
     timestate = TimeState(1, 1)
 
     # ── 2. Flux-correction spin-up ──────────────────────────────
-    if cfg.log_topo_drsp || cfg.log_qflux_dmc
-        if !cfg.log_topo_drsp && cfg.log_qflux_dmc
-            println("% loading flux correction fields...")
-            load_flux_corrections_jld2!(jld2_dir, fields)
-        end
+    if !cfg.log_topo_drsp && cfg.log_qflux_dmc
+        println("% loading flux correction fields...")
+        load_flux_corrections_jld2!(jld2_dir, fields)
+    elseif cfg.log_topo_drsp || cfg.log_qflux_dmc
         println("% flux correction  CO2 = ", CO2_ctrl)
-        qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, fields, state, timestate, cfg, ws, time_flux)
+        qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, fields, state, timestate, cfg, ws, time_flux;
+            ws_a=ws_a, ws_q=ws_q)
     else
         println("Flux correction skipped")
     end
@@ -297,7 +327,8 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
 
     for it in 1:(time_ctrl*nstep_yr)
         (mon, irec) = time_loop!(it, year, CO2_ctrl, mon, irec,
-            Ts, Ta, q, To, ctrl_output, fields, state, ws, acc, timestate, cfg)
+            Ts, Ta, q, To, ctrl_output, fields, state, ws, acc, timestate, cfg;
+            ws_a=ws_a, ws_q=ws_q)
         if mod(it, nstep_yr) == 0
             year += 1
         end
@@ -316,12 +347,19 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
         fields.sw_solar .= load_solar_forcing_jld2(jld2_dir, forcing_type, cfg.orbital_index)
     end
 
+    # IPCC SSP/historical experiments: load the year→CO2 lookup table
+    if cfg.experiment in _CO2_SCENARIO_SYMBOLS
+        println("% loading IPCC CO2 scenario ($(cfg.experiment))...")
+        scenario_key = get(_CO2_SCENARIO_KEY, cfg.experiment, cfg.experiment)
+        cfg.co2_scenario = load_co2_scenario_jld2(jld2_dir, scenario_key)
+    end
+
     # Reset state to initial conditions
     Ts .= Ts_ini;
     Ta .= Ta_ini
     q .= q_ini;
     To .= To_ini
-    year = is_orbital_exp ? 1 : 1950
+    year = is_orbital_exp ? 1 : (is_historical_exp ? 1850 : 1950)
     CO2 = 340.0;
     mon = 1;
     irec = 0
@@ -354,7 +392,8 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
         end
 
         (mon, irec) = time_loop!(it, year, CO2, mon, irec,
-            Ts, Ta, q, To, scnr_output, fields, state, ws, acc, timestate, cfg)
+            Ts, Ta, q, To, scnr_output, fields, state, ws, acc, timestate, cfg;
+            ws_a=ws_a, ws_q=ws_q)
 
         if mod(it, nstep_yr) == 0
             year += 1

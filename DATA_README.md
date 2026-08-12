@@ -2,7 +2,7 @@
 
 This document describes the **raw** `.bin` input data required to run the GREB
 climate model. The model itself reads a converted `.jld2` dataset (see
-[README.md](README.md#-input-data)) — run `scripts/convert_greb_to_jld2.jl`
+[README.md](README.md#-input-data)) - run `scripts/convert_greb_to_jld2.jl`
 against the raw files described below to produce it.
 
 ## 📁 Data Directory Structure
@@ -50,7 +50,6 @@ All climatology files contain 730 time steps (12-hour intervals over one year).
 | `erainterim.omega.vertmean.clim.bin` | Vertical velocity (Pa/s) |
 | `erainterim.omega_std.vertmean.clim.bin` | Vertical velocity std deviation |
 | `erainterim.windspeed.850hpa.clim.bin` | Wind speed at 850 hPa (m/s) |
-| `erainterim.evaporation.clim.bin` | Evaporation rate |
 
 #### Common Files (Required for Both Datasets)
 | File | Description |
@@ -82,7 +81,14 @@ All climatology files contain 730 time steps (12-hour intervals over one year).
 
 ### Scenario Forcing Files
 
-Text files containing time series of forcing values:
+Text files containing time series of forcing values. Each `ipcc.scenario.*.txt`
+file is whitespace-separated, one row per year, no header: `year CO2` (ppm,
+GREB's simplified CO2-forcing index - not literal atmospheric ppm for the RCP
+files) - extra trailing columns (as in the historical file) are ignored by
+the parser. Converted by `scripts/convert_greb_to_jld2.jl` into a single
+combined `scenario/ipcc_scenarios.jld2`, keyed by the name between
+`ipcc.scenario.` and `.forcing` (e.g. `"rcp85"`, `"ssp585"`, `"hist"`); loaded
+at runtime via `load_co2_scenario_jld2` (see README.md's "Input Data" section).
 
 | File | Description |
 |------|-------------|
@@ -90,6 +96,19 @@ Text files containing time series of forcing values:
 | `ipcc.scenario.rcp45.forcing.txt` | RCP 4.5 scenario (moderate emissions) |
 | `ipcc.scenario.rcp6.forcing.txt` | RCP 6.0 scenario |
 | `ipcc.scenario.rcp85.forcing.txt` | RCP 8.5 scenario (high emissions) |
+| `ipcc.scenario.ssp119.forcing.txt` | SSP1-1.9 scenario (very low emissions) |
+| `ipcc.scenario.ssp126.forcing.txt` | SSP1-2.6 scenario (low emissions) |
+| `ipcc.scenario.ssp245.forcing.txt` | SSP2-4.5 scenario (moderate emissions) |
+| `ipcc.scenario.ssp460.forcing.txt` | SSP4-6.0 scenario |
+| `ipcc.scenario.ssp585.forcing.txt` | SSP5-8.5 scenario (high emissions) |
+| `ipcc.scenario.hist.forcing.CO2.emission.pop.txt` | Historical CO2/emission/population (1850–2017); 4 columns, only the first two drive `:historical_co2` |
+
+`:historical_co2` (stored under the `"hist"` key) starts its scenario clock at **1850**, not 1950 like every other IPCC-family experiment - use `RunSpec(scnr=168)` to cover the file's full 1850–2017 span. It shares the 280 ppm control-run baseline with the rest of the IPCC family.
+
+Columns 3–4 (emissions, population) aren't read by the original Fortran
+model either. `convert_greb_to_jld2.jl`now preserves them anyway, in a separate `scenario/historical_emissions_population.jld2` (`year => (co2_emissions_gt_co2_yr, population_billions)`, 
+field names inferred from magnitude, not confirmed by any file metadata) for optional
+future use - nothing reads this file today.
 
 ### Optional: Solar Forcing Scenarios
 

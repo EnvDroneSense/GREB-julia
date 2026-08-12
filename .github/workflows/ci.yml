@@ -17,6 +17,7 @@ jobs:
       matrix:
         julia-version: ['1.10', '1']
         os: [ubuntu-latest]
+        shard: [light, heavy]
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -25,3 +26,5 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        env:
+          GREB_TEST_SHARD: ${{ matrix.shard }}

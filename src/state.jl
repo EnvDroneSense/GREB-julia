@@ -203,19 +203,28 @@ begin
     end
 
     function accumulate!(acc::MonthlyAccumulator, Ts, Ta, To, q, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens)
-        @. acc.Tmm += Ts
-        @. acc.Tamm += Ta
-        @. acc.Tomm += To
-        @. acc.qmm += q
-        @. acc.apmm += albedo
-        @. acc.icemm += ice
-        @. acc.precipmm += precip
-        @. acc.evapmm += evap
-        @. acc.qcrclmm += qcrcl
-        @. acc.swmm += sw
-        @. acc.lwmm += lw
-        @. acc.qlatmm += qlat
-        @. acc.qsensmm += qsens
+        Tmm = acc.Tmm; Tamm = acc.Tamm; Tomm = acc.Tomm; qmm = acc.qmm
+        apmm = acc.apmm; icemm = acc.icemm
+        precipmm = acc.precipmm; evapmm = acc.evapmm; qcrclmm = acc.qcrclmm
+        swmm = acc.swmm; lwmm = acc.lwmm; qlatmm = acc.qlatmm; qsensmm = acc.qsensmm
+
+        @turbo for j in 1:ydim
+            for i in 1:xdim
+                Tmm[i, j] += Ts[i, j]
+                Tamm[i, j] += Ta[i, j]
+                Tomm[i, j] += To[i, j]
+                qmm[i, j] += q[i, j]
+                apmm[i, j] += albedo[i, j]
+                icemm[i, j] += ice[i, j]
+                precipmm[i, j] += precip[i, j]
+                evapmm[i, j] += evap[i, j]
+                qcrclmm[i, j] += qcrcl[i, j]
+                swmm[i, j] += sw[i, j]
+                lwmm[i, j] += lw[i, j]
+                qlatmm[i, j] += qlat[i, j]
+                qsensmm[i, j] += qsens[i, j]
+            end
+        end
         acc.count += 1
     end
 end;
@@ -236,7 +245,7 @@ mutable struct ClimateFields
     cap_surf::Matrix{Float64}    # surface heat capacity [J/K/m²]
     wz_air::Matrix{Float64}      # exp(-z_topo / z_air)
     wz_vapor::Matrix{Float64}    # exp(-z_topo / z_vapor)
-
+    rain_limit::Matrix{Float64}  # -0.0015/(wz_vapor*r_qviwv*86400)
     # 3D climate fields (xdim, ydim, nstep_yr)
     Tclim::Array{Float64,3}      # surface temperature [K]
     uclim::Array{Float64,3}      # zonal wind [m/s]
@@ -285,7 +294,7 @@ end
 function ClimateFields()
     z2(args...) = zeros(Float64, args...)
     ClimateFields(
-        z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim),
+        z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),

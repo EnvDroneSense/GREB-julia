@@ -1,14 +1,31 @@
 """
-    tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg)
+    tendencies!(CO2, Ts, Ta, To, q, fields, state, ws, timestate, cfg; ws_a=ws, ws_q=ws)
 
-Runs one timestep's physics pipeline in order — [`SWradiation!`](@ref) →
+Runs one timestep's physics pipeline - [`SWradiation!`](@ref) →
 [`LWradiation!`](@ref) → sensible heat → [`hydro!`](@ref) →
-[`circulation!`](@ref) (temperature, then humidity) → [`deep_ocean!`](@ref) —
+[`circulation!`](@ref) (temperature, then humidity) → [`deep_ocean!`](@ref) -
 and returns a named tuple of every intermediate flux/tendency needed by
 [`diagnostics!`](@ref) and the caller's own state update.
+
+The two `circulation!` calls are independent of each other and of every
+other stage (each reads only pre-timestep state and writes disjoint
+buffers), so when the caller supplies distinct `ws_a`/`ws_q` workspaces
+*and* `Threads.nthreads() > 1`, they run concurrently via `Threads.@spawn`
+while the remaining stages run on `ws`. With the default `ws_a=ws_q=ws`
 """
 function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelState, ws::CirculationWorkspace,
-    timestate, cfg::PhysicsConfig)
+    timestate, cfg::PhysicsConfig; ws_a::CirculationWorkspace=ws, ws_q::CirculationWorkspace=ws)
+
+    parallel = Threads.nthreads() > 1 && ws_a !== ws_q
+
+    # Atmospheric circulation - temperature/water-vapour diffusion/advection.
+    if parallel
+        t_a = Threads.@spawn circulation!(Ta, z_air, ws_a.dTa_crcl, fields, ws_a, timestate, cfg)
+        t_q = Threads.@spawn circulation!(q, z_vapor, ws_q.dq_crcl, fields, ws_q, timestate, cfg)
+    else
+        circulation!(Ta, z_air, ws_a.dTa_crcl, fields, ws_a, timestate, cfg)
+        circulation!(q, z_vapor, ws_q.dq_crcl, fields, ws_q, timestate, cfg)
+    end
 
     # Short-wave radiation → albedo, SW flux
     sw_out = SWradiation!(Ts, fields, state, timestate, cfg, ws)
@@ -27,14 +44,13 @@ function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelStat
     # Hydrological cycle → latent heat + evaporation/rain tendencies
     hy_out = hydro!(Ts, q, fields, timestate, cfg, ws)
 
-    # Atmospheric circulation — temperature diffusion/advection
-    circulation!(Ta, z_air, ws.dTa_crcl, fields, ws, timestate, cfg)
-
-    # Atmospheric circulation — water-vapour diffusion/advection
-    circulation!(q, z_vapor, ws.dq_crcl, fields, ws, timestate, cfg)
-
     # Deep ocean coupling
     do_out = deep_ocean!(Ts, To, fields, timestate, cfg, ws)
+
+    if parallel
+        wait(t_a)
+        wait(t_q)
+    end
 
     return (albedo=sw_out.albedo,
         SW=sw_out.SW,
@@ -45,8 +61,8 @@ function tendencies!(CO2, Ts, Ta, To, q, fields::ClimateFields, state::ModelStat
         Q_lat_air=hy_out.Q_lat_air,
         dq_eva=hy_out.dq_eva,
         dq_rain=hy_out.dq_rain,
-        dq_crcl=ws.dq_crcl,
-        dTa_crcl=ws.dTa_crcl,
+        dq_crcl=ws_q.dq_crcl,
+        dTa_crcl=ws_a.dTa_crcl,
         dT_ocean=do_out.dT_ocean,
         dTo=do_out.dTo,
         LW_down=lw_out.LW_down,
@@ -60,7 +76,8 @@ end
 Returns `(CO2, sw_solar_forcing)` for the current timestep, computed
 according to `cfg.experiment`. Some experiments (the `regional_co2_*` family)
 also mutate `fields.co2_part` as a side effect. `:full_model` short-circuits
-before the experiment dispatch chain.
+before the experiment dispatch chain. The `:ssp*`/`:historical_co2`
+experiments look `year` up in `cfg.co2_scenario`.
 """
 function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl; nstep_yr=nstep_yr)
     # Default CO₂ concentration
@@ -170,44 +187,63 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
     elseif cfg.experiment == :custom_co2
         error("Custom CO₂ scenario requires external trajectory file. Not yet implemented.")
 
-    # - Regional/partial CO₂ experiments — static masks ─────────────────────
+    # - IPCC SSP/historical scenarios - CO₂ read from a per-year lookup table ─
+    elseif cfg.experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
+        yr = round(Int, year)
+        haskey(cfg.co2_scenario, yr) ||
+            error("No CO2 data for year $yr in $(cfg.experiment) scenario table " *
+                  "(loaded $(length(cfg.co2_scenario)) years)")
+        CO2 = cfg.co2_scenario[yr]
+
+    # - Regional/partial CO₂ experiments - static masks ─────────────────────
     elseif cfg.experiment in (:regional_co2_nh, :regional_co2_sh, :regional_co2_tropics, :regional_co2_extratropics)
         CO2 = 680.0
 
-    # - Regional/partial CO₂ experiments — dynamic masks ────────────────────
+    # - Regional/partial CO₂ experiments - dynamic masks ────────────────────
+    # `:regional_co2_ocean`/`:regional_co2_land_ice`'s mask depends only on
+    # `z_topo` and `icmn_ctrl` (both fixed for the whole scenario run), so
+    # it's computed once (`it == 1`) rather than recomputed every timestep;
+    # `fields.co2_part` holds the correct static mask for every later
+    # timestep since nothing else touches it for these two experiments.
     elseif startswith(string(cfg.experiment), "regional_co2_")
-        co2_part = fields.co2_part
-        co2_part .= 1.0
-
         if cfg.experiment == :regional_co2_ocean
             # 2×CO₂ Ocean only
             CO2 = 680.0
-            z_topo = fields.z_topo
-            for j in 1:ydim, i in 1:xdim
-                if z_topo[i, j] > 0.0
-                    co2_part[i, j] = 0.5
+            if it == 1
+                co2_part = fields.co2_part
+                co2_part .= 1.0
+                z_topo = fields.z_topo
+                for j in 1:ydim, i in 1:xdim
+                    if z_topo[i, j] > 0.0
+                        co2_part[i, j] = 0.5
+                    end
                 end
-            end
-            icmn_ctrl1 = @view icmn_ctrl[:, :, 1]
-            for j in 1:ydim, i in 1:xdim
-                if icmn_ctrl1[i, j] >= 0.5
-                    co2_part[i, j] = 0.5
+                # Annual-mean ice cover
+                icmn_ctrl1 = dropdims(sum(icmn_ctrl, dims=3), dims=3) ./ size(icmn_ctrl, 3)
+                for j in 1:ydim, i in 1:xdim
+                    if icmn_ctrl1[i, j] >= 0.5
+                        co2_part[i, j] = 0.5
+                    end
                 end
             end
 
         elseif cfg.experiment == :regional_co2_land_ice
             # 2×CO₂ Land/Ice only
             CO2 = 680.0
-            z_topo = fields.z_topo
-            for j in 1:ydim, i in 1:xdim
-                if z_topo[i, j] <= 0.0
-                    co2_part[i, j] = 0.5
+            if it == 1
+                co2_part = fields.co2_part
+                co2_part .= 1.0
+                z_topo = fields.z_topo
+                for j in 1:ydim, i in 1:xdim
+                    if z_topo[i, j] <= 0.0
+                        co2_part[i, j] = 0.5
+                    end
                 end
-            end
-            icmn_ctrl1 = @view icmn_ctrl[:, :, 1]
-            for j in 1:ydim, i in 1:xdim
-                if icmn_ctrl1[i, j] >= 0.5
-                    co2_part[i, j] = 1.0
+                icmn_ctrl1 = dropdims(sum(icmn_ctrl, dims=3), dims=3) ./ size(icmn_ctrl, 3)
+                for j in 1:ydim, i in 1:xdim
+                    if icmn_ctrl1[i, j] >= 0.5
+                        co2_part[i, j] = 1.0
+                    end
                 end
             end
 

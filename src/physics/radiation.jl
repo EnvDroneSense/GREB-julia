@@ -31,8 +31,8 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
     end
 
     # 2. Atmospheric albedo
-    cld = @view fields.cldclim[:, :, timestate.ityr]
-    @. a_atmos = cld * a_cloud
+    cld = fields.cldclim
+    ityr = timestate.ityr
 
     # 3. Surface albedo
     if cfg.log_ice
@@ -55,15 +55,18 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
         @. a_surf = a_no_ice
     end
 
-    # 4. Combined albedo
-    @. albedo = a_surf + a_atmos - a_surf * a_atmos
-
-    # 5. Shortwave flux
-    multiplier = state.sw_solar_forcing * 0.01 * S0_var
+    # 4. albedo + shortwave flux.
     sw_solar = fields.sw_solar
-    for j in 1:ydim
-        sf = sw_solar[j, timestate.ityr] * multiplier
-        @views @. sw[:, j] = sf * (1.0 - albedo[:, j])
+    multiplier = state.sw_solar_forcing * 0.01 * S0_var
+    @turbo for j in 1:ydim
+        sf = sw_solar[j, ityr] * multiplier
+        for i in 1:xdim
+            aa = cld[i, j, ityr] * a_cloud
+            a_atmos[i, j] = aa
+            alb = a_surf[i, j] + aa - a_surf[i, j] * aa
+            albedo[i, j] = alb
+            sw[i, j] = sf * (1.0 - alb)
+        end
     end
 
     return (SW=sw, albedo=albedo, ice_cover=ice_cover)
@@ -74,7 +77,7 @@ end
 
 Computes atmospheric emissivity from CO₂/water-vapor/cloud columns, then
 surface/upward/downward longwave flux. If `cfg.log_atmos_dmc` is false, only
-`LW_down` is zeroed — `LW_up` is snapshotted beforehand and keeps its full
+`LW_down` is zeroed - `LW_up` is snapshotted beforehand and keeps its full
 value (decouples surface from atmospheric downwelling feedback without
 touching the atmosphere's own emission term). Returns
 `(LW_surf, LW_up, LW_down, em)`.
@@ -90,27 +93,27 @@ function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::Phy
 
     wz_air = fields.wz_air
     co2_part = fields.co2_part
+    ityr = timestate.ityr
+    cldclim = fields.cldclim
+    dTrad = fields.dTrad
+    p1, p2, p3, p4, p5, p6, p7, p8, p9, p10 = p_emi
 
-    # Current cloud cover (climatology, 3D array)
-    e_cloud = @view fields.cldclim[:, :, timestate.ityr]
-
-    ## 1. Effective columns (topography scaling via wz_air)
-    @. e_vapor = wz_air * r_qviwv * q
-    @. e_co2 = wz_air * CO2 * co2_part
-
-    # ── Emissivity (log-regression with 10 parameters) ─────────
-    @. em = p_emi[4] * log(p_emi[1] * e_co2 + p_emi[2] * e_vapor + p_emi[3]) +
-            p_emi[7] +
-            p_emi[5] * log(p_emi[1] * e_co2 + p_emi[3]) +
-            p_emi[6] * log(p_emi[2] * e_vapor + p_emi[3])
-
-    # Cloud adjustment
-    @. em = (p_emi[8] - e_cloud) / p_emi[9] * (em - p_emi[10]) + p_emi[10]
-
-    # 4. Radiation temperature (precomputed offset dTrad = -0.16*Tclim - 5 K)
-    dTr = @view fields.dTrad[:, :, timestate.ityr]
-    @. LW_surf = -σ * Ts^4
-    @. LW_down = -em * σ * (Ta + dTr)^4
+    # ── Effective columns, emissivity (log-regression, 10 parameters),
+    # cloud adjustment, and surface/downward longwave flux
+    @turbo for j in 1:ydim
+        for i in 1:xdim
+            e_vapor[i, j] = wz_air[i, j] * r_qviwv * q[i, j]
+            e_co2[i, j] = wz_air[i, j] * CO2 * co2_part[i, j]
+            em_val = p4 * log(p1 * e_co2[i, j] + p2 * e_vapor[i, j] + p3) +
+                     p7 +
+                     p5 * log(p1 * e_co2[i, j] + p3) +
+                     p6 * log(p2 * e_vapor[i, j] + p3)
+            em_val = (p8 - cldclim[i, j, ityr]) / p9 * (em_val - p10) + p10
+            em[i, j] = em_val
+            LW_surf[i, j] = -σ * Ts[i, j]^4
+            LW_down[i, j] = -em_val * σ * (Ta[i, j] + dTrad[i, j, ityr])^4
+        end
+    end
     LW_up .= LW_down
 
     if !cfg.log_atmos_dmc

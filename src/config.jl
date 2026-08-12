@@ -39,7 +39,7 @@ Base.@kwdef mutable struct PhysicsConfig
     log_eva::Int = -1
     log_clim::Int = 0
 
-    # External Forcing — future implementation
+    # External anomaly forcing gates
     log_tsurf_ext::Bool = false
     log_hwind_ext::Bool = false
     log_omega_ext::Bool = false
@@ -62,6 +62,9 @@ Base.@kwdef mutable struct PhysicsConfig
     c_rq::Float64 = 0.0
     c_omega::Float64 = 0.0
     c_omegastd::Float64 = 0.0
+
+    # IPCC scenario CO₂ lookup table (year => ppm)
+    co2_scenario::Dict{Int,Float64} = Dict{Int,Float64}()
 end
 
 """
@@ -94,6 +97,8 @@ begin
     - `:lanina` - La Niña conditions
     - `:paleo_231kyr` - Paleoclimate (200 ppm CO₂)
     - `:rcp85` - RCP8.5 climate change scenario
+    - `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`
+    - `:historical_co2` - Observed CO₂ 1850–2017 (year starts at 1850, not 1950)
     """
     function create_experiment_config(experiment::Symbol)::PhysicsConfig
         if experiment == :full_model
@@ -119,10 +124,12 @@ begin
 
         elseif experiment == :elnino
             cfg = PhysicsConfig(experiment=:elnino)
+            cfg.log_tsurf_ext = cfg.log_hwind_ext = cfg.log_omega_ext = true
             return cfg
 
         elseif experiment == :lanina
             cfg = PhysicsConfig(experiment=:lanina)
+            cfg.log_tsurf_ext = cfg.log_hwind_ext = cfg.log_omega_ext = true
             return cfg
 
         elseif experiment == :paleo_231kyr
@@ -132,6 +139,15 @@ begin
 
         elseif experiment == :rcp85
             cfg = PhysicsConfig(experiment=:rcp85)
+            cfg.log_tsurf_ext = cfg.log_hwind_ext = cfg.log_omega_ext = true
+            return cfg
+
+        elseif experiment in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
+            cfg = PhysicsConfig(experiment=experiment)
+            return cfg
+
+        elseif experiment == :historical_co2
+            cfg = PhysicsConfig(experiment=:historical_co2)
             return cfg
 
         else
