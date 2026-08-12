@@ -109,6 +109,10 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     @. fields.wz_air = exp(-z_topo / z_air)
     @. fields.wz_vapor = exp(-z_topo / z_vapor)
 
+    # ── hydro!'s log_rain==1 rain-limit divisor: depends only on wz_vapor,
+    # invariant for the whole run
+    @. fields.rain_limit = -0.0015 / (fields.wz_vapor * r_qviwv * 86400.0)
+
     # ── Surface heat capacity ────────────────────────────────────
     cap_surf = fields.cap_surf
     mldclim = fields.mldclim
@@ -290,11 +294,10 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     timestate = TimeState(1, 1)
 
     # ── 2. Flux-correction spin-up ──────────────────────────────
-    if cfg.log_topo_drsp || cfg.log_qflux_dmc
-        if !cfg.log_topo_drsp && cfg.log_qflux_dmc
-            println("% loading flux correction fields...")
-            load_flux_corrections_jld2!(jld2_dir, fields)
-        end
+    if !cfg.log_topo_drsp && cfg.log_qflux_dmc
+        println("% loading flux correction fields...")
+        load_flux_corrections_jld2!(jld2_dir, fields)
+    elseif cfg.log_topo_drsp || cfg.log_qflux_dmc
         println("% flux correction  CO2 = ", CO2_ctrl)
         qflux_correction!(CO2_ctrl, Ts_ini, Ta_ini, q_ini, To_ini, fields, state, timestate, cfg, ws, time_flux;
             ws_a=ws_a, ws_q=ws_q)

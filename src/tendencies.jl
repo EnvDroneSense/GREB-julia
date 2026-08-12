@@ -218,7 +218,8 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
                         co2_part[i, j] = 0.5
                     end
                 end
-                icmn_ctrl1 = @view icmn_ctrl[:, :, 1]
+                # Annual-mean ice cover
+                icmn_ctrl1 = dropdims(sum(icmn_ctrl, dims=3), dims=3) ./ size(icmn_ctrl, 3)
                 for j in 1:ydim, i in 1:xdim
                     if icmn_ctrl1[i, j] >= 0.5
                         co2_part[i, j] = 0.5
@@ -238,7 +239,7 @@ function forcing(it, year, cfg::PhysicsConfig, fields::ClimateFields, icmn_ctrl;
                         co2_part[i, j] = 0.5
                     end
                 end
-                icmn_ctrl1 = @view icmn_ctrl[:, :, 1]
+                icmn_ctrl1 = dropdims(sum(icmn_ctrl, dims=3), dims=3) ./ size(icmn_ctrl, 3)
                 for j in 1:ydim, i in 1:xdim
                     if icmn_ctrl1[i, j] >= 0.5
                         co2_part[i, j] = 1.0

@@ -109,13 +109,12 @@ function run_light_tests()
 
         @test build_monthly_climatology(MonthlyRecord[]) == MonthlyRecord[]
 
-        # Multi-year averaging: 2 years, record idx's value == idx. Month m
-        # sees values m (year 1) and m+12 (year 2) -> mean == m+6.
+        # Final-year-only.
         two_years = MonthlyRecord[mkrec(Float64(idx)) for idx in 1:24]
         clim = build_monthly_climatology(two_years)
         @test length(clim) == 12
         for m in 1:12
-            @test all(==(Float64(m + 6)), clim[m].Ts)
+            @test all(==(Float64(m + 12)), clim[m].Ts)
         end
 
         # Non-12-multiple count: only 5 records -> months 6..12 never occur
@@ -147,8 +146,7 @@ function run_light_tests()
 
     @testset "compute_annual_ice_climatology" begin
         # Same record-index-encodes-value trick as the climatology test
-        # above: 2 years, record idx's ice value == idx, so month m sees
-        # idx m (year 1) and m+12 (year 2) -> mean == m+6.
+        # above: final-year-only.
         mkrec(v) = (Ts=zeros(GREB.xdim, GREB.ydim), Ta=zeros(GREB.xdim, GREB.ydim),
             To=zeros(GREB.xdim, GREB.ydim), q=zeros(GREB.xdim, GREB.ydim),
             albedo=zeros(GREB.xdim, GREB.ydim), ice=fill(v, GREB.xdim, GREB.ydim),
@@ -163,7 +161,7 @@ function run_light_tests()
         clim = compute_annual_ice_climatology(two_years)
         @test size(clim) == (GREB.xdim, GREB.ydim, 12)
         for m in 1:12
-            @test all(==(Float64(m + 6)), clim[:, :, m])
+            @test all(==(Float64(m + 12)), clim[:, :, m])
         end
     end
 
@@ -296,12 +294,178 @@ function run_light_tests()
         @test irec == 0
     end
 
+    @testset "diffusion!/advection!/circulation! per-cell snapshot (incl. date-line wraparound)" begin
+        # Golden per-cell snapshot (not just the golden regression's global
+        # mean) so a future refactor of the zonal neighbor-index lookups
+        # (`lon_jm1`/`lon_jp1`/etc.) that mis-handles the periodic
+        # date-line wraparound gets caught directly, not diluted into a
+        # spatial average. Deterministic (not random) T1/wz fields make any
+        # wraparound mistake show up as an obvious, reproducible diff.
+        # Covers: north pole (k=1) and south pole (k=48) rows (both also
+        # exercise the zonal polar sub-stepping branch, since
+        # dxlat_grid[1]==dxlat_grid[48] <= 2.5e5) and a mid-latitude row
+        # (k=11, dxlat_grid[11] > 2.5e5, the plain @turbo zonal branch);
+        # date-line columns 1,2,3,94,95,96 plus an interior column (50).
+        fields = ClimateFields()
+        xdim_, ydim_ = GREB.xdim, GREB.ydim
+        T1 = [100.0 * i + k for i in 1:xdim_, k in 1:ydim_]
+        wz = [1.0 + 0.001 * i - 0.0005 * k for i in 1:xdim_, k in 1:ydim_]
+        fields.wz_air .= wz
+        fields.wz_vapor .= wz
+        for it in 1:GREB.nstep_yr, k in 1:ydim_, i in 1:xdim_
+            fields.uclim_p[i, k, it] = 0.5 + 0.0001 * i
+            fields.uclim_m[i, k, it] = 0.3 + 0.0001 * k
+            fields.vclim_p[i, k, it] = 0.4 + 0.0002 * i
+            fields.vclim_m[i, k, it] = 0.2 + 0.0002 * k
+        end
+        ws = CirculationWorkspace()
+        ts = TimeState(1, 1)
+        cfg = create_experiment_config(:full_model)
+
+        test_is = [1, 2, 3, 50, 94, 95, 96]
+        test_ks = [1, 11, 48]
+
+        diffusion!(T1, GREB.z_air, fields, ws, ts)
+        dX_diff_ref = Dict(
+            (1,1)=>4517.8355192140425, (2,1)=>3542.95440832927, (3,1)=>2652.6121358299374,
+            (50,1)=>1.2269892658145531, (94,1)=>-2709.198844945152, (95,1)=>-3576.970530673063,
+            (96,1)=>-4530.555031256096,
+            (1,11)=>64.24343226619055, (2,11)=>32.16535999519279, (3,11)=>10.737877625759896,
+            (50,11)=>0.0032154796768526627, (94,11)=>-10.710851102068029, (95,11)=>-32.17954307109926,
+            (96,11)=>-64.44305854028968,
+            (1,48)=>4410.353233774593, (2,48)=>3445.760591202237, (3,48)=>2567.190165268745,
+            (50,48)=>1.1818789937009289, (94,48)=>-2623.7462653181888, (95,48)=>-3479.421880797481,
+            (96,48)=>-4422.060857683985,
+        )
+        for k in test_ks, i in test_is
+            @test isapprox(ws.dX_diff[i, k], dX_diff_ref[(i, k)]; atol=1e-9)
+        end
+
+        advection!(T1, GREB.z_air, fields, ws, ts, cfg)
+        dX_adv_ref = Dict(
+            (1,1)=>99.99281072836801, (2,1)=>37.62423619149657, (3,1)=>6.428217314852662,
+            (50,1)=>-4.182755344492395, (94,1)=>11.771946283998448, (95,1)=>60.257791236566284,
+            (96,1)=>157.2916794570926,
+            (1,11)=>6.863756666482768, (2,11)=>3.295185364395947, (3,11)=>-0.2733860065994545,
+            (50,11)=>-0.28795610784365167, (94,11)=>-0.30173415760057604, (95,11)=>5.231130705764574,
+            (96,11)=>10.766167503970431,
+            (1,48)=>99.42365199872042, (2,48)=>37.439173701522, (3,48)=>6.435048732922689,
+            (50,48)=>-4.112511103625333, (94,48)=>11.462671629384038, (95,48)=>58.8110669109033,
+            (96,48)=>153.56947120915834,
+        )
+        for k in test_ks, i in test_is
+            @test isapprox(ws.dX_adv[i, k], dX_adv_ref[(i, k)]; atol=1e-9)
+        end
+
+        dX_out = zeros(xdim_, ydim_)
+        circulation!(T1, GREB.z_air, dX_out, fields, ws, ts, cfg)
+        dX_out_ref = Dict(
+            (1,1)=>4824.155681112328, (2,1)=>4609.661409972268, (3,1)=>4395.402855867866,
+            (50,1)=>-98.5576039612888, (94,1)=>-4172.300403641432, (95,1)=>-4369.7800972827745,
+            (96,1)=>-4569.32742911384,
+            (1,11)=>1447.9977087179682, (2,11)=>765.1034286356905, (3,11)=>274.82096986927763,
+            (50,11)=>-6.684077032670757, (94,11)=>-252.25457239155912, (95,11)=>-576.3346453253889,
+            (96,11)=>-1090.2114380116673,
+            (1,48)=>4827.018868288203, (2,48)=>4605.028237288625, (3,48)=>4383.415249532827,
+            (50,48)=>-94.78570775574462, (94,48)=>-4150.449604784975, (95,48)=>-4353.86760064195,
+            (96,48)=>-4559.610385060042,
+        )
+        for k in test_ks, i in test_is
+            @test isapprox(dX_out[i, k], dX_out_ref[(i, k)]; atol=1e-9)
+        end
+    end
+
     @testset "hydro! errors on invalid log_eva" begin
         Ts = fill(290.0, GREB.xdim, GREB.ydim)
         q = fill(0.005, GREB.xdim, GREB.ydim)
         cfg = create_experiment_config(:full_model)
         cfg.log_eva = 99
         @test_throws ErrorException hydro!(Ts, q, ClimateFields(), TimeState(1, 1), cfg, CirculationWorkspace())
+    end
+
+    @testset "hydro! log_eva==1 gust includes Fortran's carried-over +2.0²/+3.0² base term (§8.2)" begin
+        # With u=v=0, wind = sqrt(gust) directly, isolating the additive
+        # constant. Fortran's shared `abswind` already carries +2.0²(land)/
+        # +3.0²(ocean) into this branch before adding its own 144.²/7.1² —
+        # the true combined constant is 4+144² land, 9+50.41 ocean, not
+        # 144²/50.41 alone (greb.model.mscm.f90:710-712,727-728).
+        mkfields(topo) = begin
+            fields = ClimateFields()
+            fields.z_topo .= topo
+            fields.mldclim .= 50.0
+            fields.Tclim .= 280.0
+            fields.Toclim .= 285.0
+            fields.qclim .= 0.006
+            fields.cldclim .= 0.5
+            fields.swetclim .= 1.0
+            fields.uclim .= 0.0
+            fields.vclim .= 0.0
+            fields.omegaclim .= 0.0
+            fields.omegastdclim .= 0.0
+            fields.wsclim .= 0.0
+            fields
+        end
+        cfg = create_experiment_config(:full_model)
+        cfg.log_eva = 1
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.008, GREB.xdim, GREB.ydim)
+        ts = TimeState(1, 1)
+
+        for (topo, gust, coeff) in ((1.0, 4.0 + 144.0, 0.04), (-1.0, 9.0 + 50.41, 0.73))
+            fields = mkfields(topo)
+            init_model!(cfg, fields)
+            ws = CirculationWorkspace()
+            result = hydro!(Ts, q, fields, ts, cfg, ws)
+
+            qs = 3.75e-3 * exp(17.08085 * (290.0 - 273.15) / (290.0 - 273.15 + 234.175)) * fields.wz_air[1, 1]
+            expected = (q[1, 1] - qs) * sqrt(gust) * GREB.cq_latent * GREB.ρ_air * coeff * GREB.ce * 1.0
+            @test isapprox(result.Q_lat[1, 1], expected; rtol = 1e-10)
+        end
+    end
+
+    @testset "hydro! doesn't apply an extra -0.9q clamp to dq_rain (§8.3)" begin
+        # Fortran's `hydro` subroutine has no such clamp — the real
+        # threshold-replace applies once, downstream, to the combined dq in
+        # time_loop!'s update (§0.18). Force the raw regression to predict a
+        # huge fractional loss (dq_rain very negative) and confirm dq_rain
+        # (and Q_lat_air derived from it) reflect the UNclamped regression
+        # value, not a value pulled up to -0.9q/Δt.
+        fields = ClimateFields()
+        fields.z_topo .= 1.0
+        fields.mldclim .= 50.0
+        fields.Tclim .= 280.0
+        fields.Toclim .= 285.0
+        fields.qclim .= 0.006
+        fields.cldclim .= 0.5
+        fields.swetclim .= 1.0
+        fields.uclim .= 0.0
+        fields.vclim .= 0.0
+        fields.omegaclim .= 0.0
+        fields.omegastdclim .= 0.0
+        fields.wsclim .= 0.0
+        cfg = create_experiment_config(:full_model)
+        cfg.log_rain = 0  # disable the (unrelated) rain-limit clamp
+        init_model!(cfg, fields)
+
+        # Override c_q/etc AFTER init_model! — it calls
+        # set_hydrology_parameters!, which would otherwise clobber these
+        # back to the log_rain-indexed HYDRO_PARAMS preset. cq_rain is
+        # negative, so a large POSITIVE c_q drives dq_rain far below
+        # -0.9q/Δt (dq_rain = c_q*cq_rain*q).
+        cfg.c_q = 1000.0
+        cfg.c_rq = 0.0; cfg.c_omega = 0.0; cfg.c_omegastd = 0.0
+
+        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        q = fill(0.008, GREB.xdim, GREB.ydim)
+        ts = TimeState(1, 1)
+        ws = CirculationWorkspace()
+        result = hydro!(Ts, q, fields, ts, cfg, ws)
+
+        expected_dq_rain = cfg.c_q * GREB.cq_rain * q[1, 1]
+        min_dq_that_would_have_clamped = -0.9 * q[1, 1] / GREB.Δt
+        @test expected_dq_rain < min_dq_that_would_have_clamped  # sanity: the old clamp would have fired
+        @test isapprox(result.dq_rain[1, 1], expected_dq_rain; rtol = 1e-10)
+        @test isapprox(result.Q_lat_air[1, 1], -expected_dq_rain * GREB.cq_latent * GREB.r_qviwv; rtol = 1e-10)
     end
 
     @testset "SWradiation! is allocation-free" begin
@@ -420,6 +584,37 @@ function run_heavy_tests()
         @test result.ctrl[1] isa MonthlyRecord
     end
 
+    @testset "greb_model! flux-correction spin-up: loaded files aren't overwritten by qflux_correction! (§8.5)" begin
+        # log_topo_drsp=false + log_qflux_dmc=true selects the "load
+        # precomputed files" branch. Before the fix, qflux_correction! ran
+        # unconditionally right after and overwrote the just-loaded values
+        # whenever time_flux > 0 — use flux=1 (not the RunSpec default of 0)
+        # so the spin-up loop actually executes and the old bug would fire.
+        tmpdir = mktempdir()
+        try
+            mkpath(joinpath(tmpdir, "climatology"))
+            GREB.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
+                f["Tsurf_flux_correction"] = fill(42.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                f["vapour_flux_correction"] = fill(43.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+                f["Tocean_flux_correction"] = fill(44.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+            end
+
+            cfg = create_experiment_config(:full_model)
+            cfg.log_topo_drsp = false
+            cfg.log_qflux_dmc = true
+            fields = ClimateFields()
+            redirect_stdout(devnull) do
+                greb_model!(RunSpec(flux = 1, ctrl = 0, scnr = 0), cfg; jld2_dir = tmpdir, fields = fields)
+            end
+
+            @test all(==(42.0), fields.TF_correct)
+            @test all(==(43.0), fields.qF_correct)
+            @test all(==(44.0), fields.ToF_correct)
+        finally
+            rm(tmpdir; recursive = true, force = true)
+        end
+    end
+
     @testset "greb_model! runs across log_eva / log_rain branches" begin
         log_evas = (-1, 0, 1, 2)
         log_rains = (-1, 0, 1, 2, 3)
@@ -510,6 +705,25 @@ function run_heavy_tests()
         finally
             rm(tmpdir; recursive = true, force = true)
         end
+    end
+
+    @testset "forcing() regional-CO2 ice mask uses the annual mean, not January (§8.1)" begin
+        fields = ClimateFields()  # z_topo defaults to 0 everywhere -> land branch never fires
+        cfg = PhysicsConfig(experiment = :regional_co2_ocean)
+
+        icmn_ctrl = zeros(Float64, GREB.xdim, GREB.ydim, 12)
+        # Cell A: January alone >= 0.5, but the other 11 months are 0 ->
+        # annual mean ~0.083, NOT ice under the Fortran-matching rule.
+        icmn_ctrl[1, 1, 1] = 1.0
+        # Cell B: January alone < 0.5, but the other 11 months are 1.0 ->
+        # annual mean ~0.917, IS ice under the Fortran-matching rule.
+        icmn_ctrl[2, 1, 1] = 0.0
+        icmn_ctrl[2, 1, 2:12] .= 1.0
+
+        forcing(1, 1970, cfg, fields, icmn_ctrl)
+
+        @test fields.co2_part[1, 1] == 1.0  # January said "ice"; annual mean says no
+        @test fields.co2_part[2, 1] == 0.5  # January said "no ice"; annual mean says yes
     end
 
     @testset "greb_model! reaches every :experiment symbol forcing()/init_model! dispatch on" begin

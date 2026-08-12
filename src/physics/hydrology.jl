@@ -99,8 +99,8 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
             end
         end
     elseif cfg.log_eva == 1
-        gust_land_1 = 144.0
-        gust_ocean_1 = 50.41  # 7.1^2
+        gust_land_1 = gust_land + 144.0
+        gust_ocean_1 = gust_ocean + 50.41  # 7.1^2
         @turbo for j in 1:ydim
             for i in 1:xdim
                 u_val = u[i, j];
@@ -134,22 +134,21 @@ function hydro!(Ts, q, fields::ClimateFields, timestate, cfg::PhysicsConfig, ws:
         end
     end
 
-    # Apply rain limit
+    # Apply rain limit (rain_limit precomputed once in init_model!)
     if cfg.log_rain == 1
+        rain_limit = fields.rain_limit
         @turbo for j in 1:ydim
             for i in 1:xdim
-                limit_val = -0.0015 / (wz_vapor[i, j] * r_qviwv * 86400.0)
+                limit_val = rain_limit[i, j]
                 ws.dq_rain_buf[i, j] = ifelse(ws.dq_rain_buf[i, j] >= limit_val, limit_val, ws.dq_rain_buf[i, j])
             end
         end
     end
 
-    # Water vapor tendencies
+    # Water vapor tendencies.
     @turbo for j in 1:ydim
         for i in 1:xdim
             ws.dq_eva_buf[i, j] = -ws.Q_lat_buf[i, j] / cq_latent / r_qviwv
-            min_dq = -0.9 * q[i, j] / Δt
-            ws.dq_rain_buf[i, j] = ifelse(ws.dq_rain_buf[i, j] < min_dq, min_dq, ws.dq_rain_buf[i, j])
             ws.Q_lat_air_buf[i, j] = -ws.dq_rain_buf[i, j] * cq_latent * r_qviwv
         end
     end

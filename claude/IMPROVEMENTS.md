@@ -126,6 +126,39 @@ shape** given §2.11 already gets 2.0× more cheaply; canceled by user
 request. Could matter more for a GPU/ensemble-batched use case (§2.11),
 untested here. Full methodology: `CHANGELOG.md`.
 
+**Follow-up, benchmarked (`CircularArrays.jl` for the gather pattern itself) — tried, measured, rejected.**
+An outside suggestion proposed `CircularArrays.jl` as a direct fix for the
+gather pattern identified above: wrap `T1`/`wz` so periodic-longitude
+neighbor reads (`T1[j-1,k]`/`T1[j+1,k]`) become ordinary offset accesses
+instead of indexing through `lon_jm1..jp3`. Built a standalone clone of
+`diffusion!`'s zonal stencil (`src/circulation.jl:73-94`) two ways —
+today's `Matrix{Float64}` + index-array approach vs. a `CircularVector`
+wrapping each row (`CircularArrays.jl` circularizes *every* dimension of a
+`CircularArray`, so a whole-2D-array wrap would incorrectly wrap the
+non-periodic latitude axis too — a per-row `CircularVector` is the only
+structurally correct option) — and measured both, `@turbo`-annotated
+identically:
+
+| | time/call | vs. baseline |
+|---|---|---|
+| Baseline (`Matrix` + index arrays, `@turbo`) | 16–30 µs | 1× |
+| `CircularVector`-per-row (`@turbo`) | 340–426 µs | **0.03–0.09× (10–20× slower)** |
+
+Output was correct (diffs `1.6e-16`, float-reassociation only, 0 bytes/call
+either way), but `@turbo` **silently fails to compile** over the
+`CircularVector`-backed loop (`LoopVectorization.check_args` rejects it,
+falling back to a plain `@inbounds @fastmath` loop with a runtime warning)
+— confirmed directly in `code_native`: the baseline's inner loop is real
+packed-SIMD code (`vgatherqpd`×12, `vmovupd`/`vmovapd`×26, `...pd` = packed
+double), while the circular version's inner loop is **100% scalar**
+(`vmovsd`/`vmulsd`/`vsubsd`/`vaddsd`, `...sd` = scalar double, zero packed
+instructions of any kind). The fix removes the gather instructions
+entirely, exactly as claimed — but takes the SIMD vectorization down with
+it, which costs far more than the gather ever did. **Rejected**: this is
+worse than doing nothing on every axis (correctness aside), confirming the
+`@turbo`-compatibility risk flagged before running the experiment. Script:
+`benchmark/circular_arrays_experiment.jl`.
+
 ### 2.4 Thread the spatial operators — tried, measured, reverted
 `Threads.@threads :static` on `diffusion!`/`advection!`'s outer row loop,
 validated bit-identical output, but **3–6× slower** end-to-end at `-t auto`/14
@@ -135,6 +168,47 @@ Reverted to plain `for k in 1:ydim` loops. **Takeaway**: don't retry plain
 `Threads.@threads` at this grid/kernel shape without a reason to expect a
 different result; `Polyester.@batch` or a much larger grid might fare
 better.
+
+**Follow-up, benchmarked (`Polyester.jl` retry) — real but narrow, fragile win; not implemented.**
+Retried the reverted idea with `Polyester.@batch` instead of
+`Threads.@threads`, on a standalone clone of `diffusion!`'s *full* outer-`k`
+loop (mid-latitude **and** polar branches — the polar branches reuse a
+single shared `ws.T1h`/`ws.dTxh` scratch buffer across an inner sub-step
+loop in the real code, `src/state.jl:10-11`, which would race under
+concurrent `k`; the clone gives each lane a private `(xdim, nlanes)`
+scratch matrix indexed by `Threads.threadid()` instead). Verified
+bit-identical output vs. sequential across every thread count tested,
+including 5 repeated trials per count to rule out an intermittent race —
+none found. Timed at every thread count from 1 to the machine's full 14
+logical cores:
+
+| `-t` | time/call | speedup |
+|---|---|---|
+| 1 | 61.6 µs | 1.00× |
+| 2 | 65.1 µs | 0.92× |
+| 3 | 54.3 µs | 1.17× |
+| **4** | **35.4 µs** | **1.79×** |
+| 5 | 110.5 µs | 0.55× |
+| 6 | 158.7 µs | 0.37× |
+| 7 | 166.6 µs | 0.35× |
+| 8 | 137.6 µs | 0.43× |
+| 14 (all logical cores) | 16,900–18,000 µs | **0.003–0.004×** (270–340× *slower*) |
+
+Real result, not a wash: **`-t 4` gives a genuine 1.79× speedup** with
+correct output — a materially better outcome than `Threads.@threads`'s flat
+3–6× slowdown at every thread count tried in the original attempt. But the
+curve is sharply non-monotonic and **not safe to run at `-t auto`** — every
+count above 4 degrades, and running at the machine's full logical-core
+count (14) doesn't just lose the speedup, it collapses catastrophically
+(reproduced twice, both ~300× slower than sequential), consistent with
+Polyester's static per-lane scheduling overhead dominating once lane count
+exceeds what a 48-row loop can actually use, compounded by likely
+oversubscription past physical-core count on a hyperthreaded machine. **Not
+implemented**: a real win exists, but only if the thread count is
+explicitly pinned (e.g. `-t 4`, not `-t auto`) rather than left to the
+caller's environment — that's a behavioral/deployment decision, not a pure
+code change, and is left for a follow-up once a specific thread-count
+policy is decided. Script: `benchmark/polyester_experiment.jl`.
 
 ### 2.5 Cut per-call allocations in `forcing` ✅ done
 `icmn_ctrl` is a required argument computed once, not fresh zeros every call.
@@ -596,90 +670,77 @@ only).
 
 ---
 
-## 8. Newly found bugs (2026-08-12 sweep) — documented, not yet fixed
+## 8. Bugs found in the 2026-08-12 sweep — ✅ all fixed
 
-A fresh Fortran-vs-Julia audit, run in parallel with in-progress performance
-work (§2.11). **Left unfixed by explicit user decision**, to avoid
-behavioral edits landing concurrently with the performance changes — this
-section is a punch list for a future pass. Every finding below was verified
-directly against `greb.model.mscm.f90`, not just relayed from the discovery
-tool. Full method: `CHANGELOG.md`.
+A fresh Fortran-vs-Julia audit (run in parallel with the in-progress
+performance work in §2.11) found 5 real bugs, initially left undocumented-
+but-unfixed to avoid colliding with concurrent performance edits, then
+implemented in a follow-up pass once that settled. Every finding was
+verified directly against `greb.model.mscm.f90` before being fixed, and
+each has a regression test in `test/runtests.jl`. Full discovery method:
+`CHANGELOG.md`.
 
-### 8.1 `forcing()`'s regional-CO₂ ice mask uses only January, not the annual mean
-`tendencies.jl:200,216` (`:regional_co2_ocean`/`:regional_co2_land_ice`) take
-`icmn_ctrl[:, :, 1]` — January's ice cover only. Fortran
+### 8.1 `forcing()`'s regional-CO₂ ice mask used only January, not the annual mean ✅ fixed
+`tendencies.jl:200,216` (`:regional_co2_ocean`/`:regional_co2_land_ice`) took
+`icmn_ctrl[:, :, 1]` — January's ice cover only — where Fortran
 (`greb.model.mscm.f90:1279-1283`) averages `icmn_ctrl` across all 12 months
-before thresholding at `:1331,:1335`. Any grid cell whose January ice cover
-disagrees with its annual mean relative to the 0.5 threshold gets the wrong
-`co2_part` override in these two experiments. **Confidence: high.**
-**Suggested fix**: average `icmn_ctrl` over its third dimension before use,
-matching `greb.model.mscm.f90:1279-1283`.
+before thresholding. Fixed: `icmn_ctrl1` is now
+`dropdims(sum(icmn_ctrl, dims=3), dims=3) ./ size(icmn_ctrl, 3)` at both
+call sites. Test: `forcing() regional-CO2 ice mask uses the annual mean, not
+January (§8.1)`.
 
-### 8.2 `hydro!`'s `log_eva==1` branch drops a carried-over base gust term
-`physics/hydrology.jl:101-113`. Fortran's `abswind` already carries
-`+2.0²` (land)/`+3.0²` (ocean) into the `log_eva` dispatch
+### 8.2 `hydro!`'s `log_eva==1` branch dropped a carried-over base gust term ✅ fixed
+`physics/hydrology.jl:101-113`. Fortran's `abswind` already carries `+2.0²`
+(land)/`+3.0²` (ocean) into the `log_eva` dispatch
 (`greb.model.mscm.f90:710-712`); the `log_eva==1` branch (`:727-728`) adds
 its own `144.²`/`7.1²` *on top of* that already-modified variable, so the
-true combined constant is `4+144²` land, `9+50.41` ocean. Julia recomputes
-wind from scratch and adds only `144.0`/`50.41`, missing the `+4`/`+9`.
-Affects evaporation wind speed (and therefore `Q_lat`/`dq_eva`) at every
-grid point, every timestep `cfg.log_eva == 1` is active; `log_eva ∈
-{-1,0,2}` are unaffected (they fully reset/overwrite `abswind`).
-**Confidence: medium-high.** **Suggested fix**: add `4.0`/`9.0` to
-`gust_land_1`/`gust_ocean_1` (i.e. `148.0`/`59.41`), or restructure to match
-Fortran's two-stage `abswind` computation exactly.
+true combined constant is `4+144²` land, `9+50.41` ocean — Julia recomputed
+wind from scratch and added only `144.0`/`50.41`. Fixed: `gust_land_1`/
+`gust_ocean_1` now add the existing `gust_land`/`gust_ocean` (`4.0`/`9.0`)
+constants already used by the `log_eva==-1` branch. Test: `hydro!
+log_eva==1 gust includes Fortran's carried-over +2.0²/+3.0² base term
+(§8.2)`.
 
-### 8.3 `hydro!` applies a spurious extra clamp to `dq_rain` alone
-`physics/hydrology.jl:150-153` clamps `dq_rain` to `-0.9*q/Δt` inside
-`hydro!`. Fortran's `hydro` subroutine (`greb.model.mscm.f90:687-761`) has
-no such clamp — the real Fortran clamp (`:481-483`) applies once, in
-`time_loop`, to the *combined* post-`dt` total
-`dq = Δt*(dq_eva+dq_rain) + dq_crcl + qF_correct`, which Julia already
+### 8.3 `hydro!` applied a spurious extra clamp to `dq_rain` alone ✅ fixed
+`physics/hydrology.jl:150-153` clamped `dq_rain` to `-0.9*q/Δt` inside
+`hydro!`, duplicating (and pre-empting, with a different formula) the real
+Fortran clamp on the *combined* post-`dt` total, which Julia already
 implements correctly and separately in `output.jl:163-164` (the §0.18 fix).
-This extra clause pre-truncates `dq_rain` in isolation — different formula,
-different point in the pipeline — before that correct clamp runs, and feeds
-the truncated value into `Q_lat_air`. Affects the precipitation diagnostic
-and atmospheric latent-heat coupling whenever the raw `dq_rain` regression
-predicts a very large fractional humidity loss (dry regions/seasons).
-**Confidence: high.** **Suggested fix**: delete lines 151-152 in
-`hydro!` (the `min_dq`/clamp lines); leave the combined-`dq` clamp in
-`output.jl` as the sole clamp, matching Fortran.
+Fortran's `hydro` subroutine (`greb.model.mscm.f90:687-761`) has no such
+clamp. Fixed: removed the `min_dq`/clamp lines from `hydro!`'s water-vapor-
+tendency loop, leaving `output.jl`'s combined-`dq` clamp as the sole clamp.
+Test: `hydro! doesn't apply an extra -0.9q clamp to dq_rain (§8.3)`.
 
-### 8.4 Control-run climatology baseline averages every control year instead of only the final year
+### 8.4 Control-run climatology baseline averaged every control year instead of only the final year ✅ fixed
 `model.jl:308-321` (`ctrl_output`) accumulates a `MonthlyRecord` for every
 month of every control year; `build_monthly_climatology`/
-`compute_annual_ice_climatology` (`postprocess.jl:7-41,72-89`) then average
-across the *entire* vector. Fortran's `output` subroutine
-(`greb.model.mscm.f90:1422-1446`) only assigns into
-`Tmn_ctrl`/`icmn_ctrl`/etc. when `it/ndt_days > 365*(time_ctrl-1)` — i.e.
-only the **final** control year; every earlier year's accumulator is
-computed then discarded. This is a straight per-month assignment from the
-last year, not a multi-year average. Every real Fortran run script uses
-`time_ctrl` of 3 or 50 years (never 1), so this diverges from the reference
-whenever `RunSpec.ctrl > 1` — only the Julia default (`ctrl=1`) happens to
-make the two schemes coincide. Affects every scenario anomaly
-(`apply_scenario_anomalies`) and the regional-CO2
-land/ocean/tropics/extratropics experiments' `ice_forcing`. **Confidence:
-high.** **Suggested fix**: in `build_monthly_climatology`/
-`compute_annual_ice_climatology`, use only the final 12 records of
-`ctrl_output` (or restructure `greb_model!` to only retain the last control
-year), matching Fortran's `it/ndt_days > 365*(time_ctrl-1)` gate.
+`compute_annual_ice_climatology` (`postprocess.jl`) averaged across the
+*entire* vector, where Fortran's `output` subroutine
+(`greb.model.mscm.f90:1422-1446`) only ever assigns into
+`Tmn_ctrl`/`icmn_ctrl`/etc. during the **final** control year — a straight
+per-month value from the last year, not a multi-year average. Silently
+correct only when `RunSpec.ctrl==1` (the Julia default); wrong for any
+multi-year control run (the norm in every real Fortran run script). Fixed:
+both functions now take only the final 12 records of the input vector
+(`records[max(1, n-11):n]`), falling back to `records[1]`/zeros for the
+`n<12` edge case exactly as before. Golden regression test unaffected
+(`RunSpec()`'s default `ctrl=1` makes final-year-only and multi-year-average
+identical). Tests: `build_monthly_climatology/apply_scenario_anomalies` and
+`compute_annual_ice_climatology` (both updated to assert the final-year
+value, not the old multi-year mean).
 
-### 8.5 Flux-correction spin-up loads precomputed files, then immediately overwrites them
+### 8.5 Flux-correction spin-up loaded precomputed files, then immediately overwrote them ✅ fixed
 `model.jl:281-290`: when `!cfg.log_topo_drsp && cfg.log_qflux_dmc`, Julia
-calls `load_flux_corrections_jld2!` and then unconditionally calls
-`qflux_correction!` right after, which recomputes and overwrites the exact
-same `fields.TF_correct`/`qF_correct`/`ToF_correct` arrays
-(`model.jl:182` et al.) — the load has zero effect on the run, despite
-printing "% loading flux correction fields...". Fortran's equivalent
+called `load_flux_corrections_jld2!` and then unconditionally called
+`qflux_correction!` right after, which recomputed and overwrote the exact
+same `fields.TF_correct`/`qF_correct`/`ToF_correct` arrays — the load had
+zero effect on the run. Fortran's equivalent
 (`greb.model.mscm.f90:357-390`) is a mutually exclusive `if/elseif/else`:
-compute fresh **or** read precomputed files **or** zero — never both.
-This is dead code regardless of the separate, lower-confidence question of
-whether `log_topo_drsp`/`log_qflux_dmc` are even the right switches for
-this gate — Fortran's real gate is `log_exp`, and that mismap entangles
-with the already-documented §7.3 finding about `_dmc`/`_drsp` families
-lacking a combined preset (not re-litigated here). **Confidence: high** on
-the dead-code overwrite itself; **medium** on the switch-mapping root
-cause. **Suggested fix**: make the load and the fresh-computation branches
-mutually exclusive (`if`/`elseif`/`else`, not `if` + unconditional call
-after), matching Fortran's structure at `greb.model.mscm.f90:357-390`.
+compute fresh **or** read precomputed files **or** zero — never both. Fixed:
+the spin-up's `if`/`if` pair is now `if`/`elseif`/`else`, matching Fortran's
+structure. (The separate, lower-confidence question of whether
+`log_topo_drsp`/`log_qflux_dmc` are even the right switches for this gate —
+Fortran's real gate is `log_exp` — is the already-documented §7.3 finding
+about `_dmc`/`_drsp` families lacking a combined preset; not re-litigated
+here.) Test: `greb_model! flux-correction spin-up: loaded files aren't
+overwritten by qflux_correction! (§8.5)`.

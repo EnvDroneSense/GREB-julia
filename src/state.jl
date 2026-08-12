@@ -245,7 +245,7 @@ mutable struct ClimateFields
     cap_surf::Matrix{Float64}    # surface heat capacity [J/K/m²]
     wz_air::Matrix{Float64}      # exp(-z_topo / z_air)
     wz_vapor::Matrix{Float64}    # exp(-z_topo / z_vapor)
-
+    rain_limit::Matrix{Float64}  # -0.0015/(wz_vapor*r_qviwv*86400)
     # 3D climate fields (xdim, ydim, nstep_yr)
     Tclim::Array{Float64,3}      # surface temperature [K]
     uclim::Array{Float64,3}      # zonal wind [m/s]
@@ -294,7 +294,7 @@ end
 function ClimateFields()
     z2(args...) = zeros(Float64, args...)
     ClimateFields(
-        z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim),
+        z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim), z2(xdim, ydim),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),

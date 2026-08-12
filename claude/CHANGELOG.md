@@ -169,6 +169,89 @@ reverted after judging the Fortran value itself wasn't worth copying.
 
 ## Changelog of this document
 
+- **2026-08-12 (implemented the §8 bug-sweep findings)**: §8's 5 findings
+  were originally left documented-but-unfixed to avoid colliding with the
+  in-progress performance work; asked to implement them once that settled.
+  Re-checked each finding's cited lines against the current source first
+  (concurrent performance-pass edits had touched `hydrology.jl`/`model.jl`/
+  `tendencies.jl`/`state.jl` in the meantime) — all 5 were confirmed still
+  present, unchanged in substance, before fixing:
+  - §8.1: `tendencies.jl`'s two `icmn_ctrl1 = @view icmn_ctrl[:,:,1]` sites
+    now average over the full 12-month dimension.
+  - §8.2: `hydro!`'s `log_eva==1` gust constants now add the existing
+    `gust_land`/`gust_ocean` (`4.0`/`9.0`) constants, matching Fortran's
+    carried-over `abswind` base term.
+  - §8.3: removed `hydro!`'s spurious `min_dq`/`-0.9q/Δt` clamp on
+    `dq_rain` alone; `output.jl`'s combined-`dq` clamp (§0.18) is now the
+    only clamp, matching Fortran.
+  - §8.4: `build_monthly_climatology`/`compute_annual_ice_climatology`
+    (`postprocess.jl`) now return only the final 12 records of their input,
+    not a multi-year average — required updating 2 existing tests
+    (`build_monthly_climatology/apply_scenario_anomalies`,
+    `compute_annual_ice_climatology`) whose 2-year-average assertions
+    (`m+6`) encoded the old buggy behavior; both now assert the
+    Fortran-matching final-year value (`m+12`). Confirmed the golden
+    regression test is unaffected (`RunSpec()`'s default `ctrl=1` makes
+    final-year-only and multi-year-average numerically identical).
+  - §8.5: `model.jl`'s flux-correction spin-up `if`/`if` pair (load, then
+    unconditionally also compute-fresh) is now `if`/`elseif`/`else`,
+    matching Fortran's mutually-exclusive dispatch.
+  Added one new regression test per fix (`§8.1`/`§8.2`/`§8.3`/`§8.5` —
+  `§8.4` reused/updated the 2 existing postprocess tests instead of adding
+  new ones, since they already covered the exact functions being changed).
+  One test-authoring mistake caught and fixed along the way: the first
+  `§8.3` test draft used the wrong sign for `c_q` (produced a small
+  positive `dq_rain` instead of a large negative one, so it never actually
+  reached clamp territory) and separately failed to account for
+  `init_model!` calling `set_hydrology_parameters!`, which clobbers a
+  manually-set `c_q`/`c_rq`/`c_omega`/`c_omegastd` back to the
+  `log_rain`-indexed preset — fixed by setting those fields *after*
+  `init_model!` instead of before. Full suite re-run clean: 210/210 light +
+  182/182 heavy.
+- **2026-08-12 (Polyester.jl + CircularArrays.jl trials, §2.3/§2.4)**: an
+  outside reviewer's package suggestion list named two "five-minute
+  experiments" for open performance items — `Polyester.jl` to retry §2.4's
+  reverted `Threads.@threads` row-threading with a lower-overhead scheduler,
+  and `CircularArrays.jl` to remove the `vgather`-vs-`vmovup` gather pattern
+  §2.3/§2.12 diagnosed as the reason `Float32`/further `@turbo` tuning
+  underdeliver. First pass at this request answered structurally (read the
+  code, reasoned about compatibility) without running anything — user
+  correctly rejected that as not what was asked, and asked for real
+  benchmark code instead. Built a new `benchmark/` directory (`Project.toml`
+  with `CircularArrays`/`Polyester`/`LoopVectorization` as benchmark-only
+  deps, kept separate from GREB's own `Project.toml` per the user's explicit
+  choice) with two standalone scratch scripts, same "verbatim-logic clone,
+  correctness-then-timing" discipline as every prior benchmark in this
+  project:
+  - `benchmark/circular_arrays_experiment.jl` — cloned `diffusion!`'s zonal
+    stencil (`circulation.jl:73-94`) two ways. Found `CircularArrays.jl`
+    circularizes every dimension of a `CircularArray` (no per-dimension
+    option), so the only structurally valid use here is a `CircularVector`
+    per row, not a whole-array wrap (which would incorrectly wrap the
+    non-periodic latitude axis). Result: correct output, but `@turbo`
+    silently fails `LoopVectorization.check_args` on the `CircularVector`
+    version and falls back to a scalar (non-SIMD) loop — confirmed directly
+    in `code_native` (baseline: `vgatherqpd`×12 + real packed-`pd` SIMD ops;
+    circular: zero packed ops, 100% scalar `sd` instructions) — making it
+    10–20× *slower* (16–30µs → 340–426µs), not faster. Rejected.
+  - `benchmark/polyester_experiment.jl` — cloned `diffusion!`'s full
+    outer-`k` loop (mid-latitude + polar branches), giving each `@batch`
+    lane a private `(xdim, nlanes)` scratch matrix instead of the real
+    code's single shared `ws.T1h`/`ws.dTxh` (which would race under
+    concurrent `k`). Verified bit-identical output at every thread count
+    tried, with 5 repeated trials per count to rule out an intermittent
+    race (none found). Swept `-t 1` through `-t 14` (the machine's full
+    logical-core count): found a real 1.79× speedup at `-t 4`, but a sharply
+    non-monotonic curve — every count above 4 degrades, and `-t 14`
+    collapses catastrophically (270–340× *slower*, reproduced twice). A real
+    win exists but only at a specific, pinned thread count, not at `-t
+    auto` — left undecided (not implemented) pending a thread-count policy
+    decision, and to avoid landing a change in `circulation.jl` while the
+    user's own performance work is in flight there (matching §2.11's
+    "benchmarked, not yet wired in" precedent). Documented in `IMPROVEMENTS.md`
+    §2.3/§2.4 as follow-ups; `benchmark/` and its scripts committed so this
+    is the first real reusable benchmark harness in the repo (every prior
+    benchmark was an uncommitted scratch script).
 - **2026-08-12 (performance sweep: 4 more `@turbo` wins, 1 algorithmic fix,
   2 more negative results, 3 investigated-not-implemented)**: user asked for
   a wider sweep beyond §2.12's 4 already-landed spots, explicitly including
