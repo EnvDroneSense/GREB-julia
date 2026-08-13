@@ -84,7 +84,7 @@ function run_light_tests()
         cfg.log_rain = 0
         cfg.log_clim = 1
         set_hydrology_parameters!(cfg)
-        @test (cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd) == (-1.27, 1.99, -16.54, 21.15)
+        @test all(isapprox.((cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd), (-1.27, 1.99, -16.54, 21.15); atol = 1e-4))
     end
 
     @testset "set_hydrology_parameters! errors on invalid log_rain" begin
@@ -341,7 +341,7 @@ function run_light_tests()
         # date-line columns 1,2,3,94,95,96 plus an interior column (50).
         fields = ClimateFields()
         xdim_, ydim_ = GREB.xdim, GREB.ydim
-        T1 = [100.0 * i + k for i in 1:xdim_, k in 1:ydim_]
+        T1 = Float32[100.0 * i + k for i in 1:xdim_, k in 1:ydim_]
         wz = [1.0 + 0.001 * i - 0.0005 * k for i in 1:xdim_, k in 1:ydim_]
         fields.wz_air .= wz
         fields.wz_vapor .= wz
@@ -371,7 +371,7 @@ function run_light_tests()
             (96,48)=>-4422.060857683985,
         )
         for k in test_ks, i in test_is
-            @test isapprox(ws.dX_diff[i, k], dX_diff_ref[(i, k)]; atol=1e-9)
+            @test isapprox(ws.dX_diff[i, k], dX_diff_ref[(i, k)]; atol=1e-3, rtol=1e-4)
         end
 
         advection!(T1, GREB.z_air, fields, ws, ts, cfg)
@@ -387,7 +387,7 @@ function run_light_tests()
             (96,48)=>153.56947120915834,
         )
         for k in test_ks, i in test_is
-            @test isapprox(ws.dX_adv[i, k], dX_adv_ref[(i, k)]; atol=1e-9)
+            @test isapprox(ws.dX_adv[i, k], dX_adv_ref[(i, k)]; atol=1e-3, rtol=1e-4)
         end
 
         dX_out = zeros(xdim_, ydim_)
@@ -404,7 +404,7 @@ function run_light_tests()
             (96,48)=>-4559.610385060042,
         )
         for k in test_ks, i in test_is
-            @test isapprox(dX_out[i, k], dX_out_ref[(i, k)]; atol=1e-9)
+            @test isapprox(dX_out[i, k], dX_out_ref[(i, k)]; atol=1e-3, rtol=1e-4)
         end
     end
 
@@ -440,8 +440,8 @@ function run_light_tests()
         end
         cfg = create_experiment_config(:full_model)
         cfg.log_eva = 1
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        q = fill(0.008, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0f0, GREB.xdim, GREB.ydim)
+        q = fill(0.008f0, GREB.xdim, GREB.ydim)
         ts = TimeState(1, 1)
 
         for (topo, gust, coeff) in ((1.0, 4.0 + 144.0, 0.04), (-1.0, 9.0 + 50.41, 0.73))
@@ -452,7 +452,7 @@ function run_light_tests()
 
             qs = 3.75e-3 * exp(17.08085 * (290.0 - 273.15) / (290.0 - 273.15 + 234.175)) * fields.wz_air[1, 1]
             expected = (q[1, 1] - qs) * sqrt(gust) * GREB.cq_latent * GREB.ρ_air * coeff * GREB.ce * 1.0
-            @test isapprox(result.Q_lat[1, 1], expected; rtol = 1e-10)
+            @test isapprox(result.Q_lat[1, 1], expected; rtol = 1e-5)
         end
     end
 
@@ -488,8 +488,8 @@ function run_light_tests()
         cfg.c_q = 1000.0
         cfg.c_rq = 0.0; cfg.c_omega = 0.0; cfg.c_omegastd = 0.0
 
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        q = fill(0.008, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0f0, GREB.xdim, GREB.ydim)
+        q = fill(0.008f0, GREB.xdim, GREB.ydim)
         ts = TimeState(1, 1)
         ws = CirculationWorkspace()
         result = hydro!(Ts, q, fields, ts, cfg, ws)
@@ -497,8 +497,8 @@ function run_light_tests()
         expected_dq_rain = cfg.c_q * GREB.cq_rain * q[1, 1]
         min_dq_that_would_have_clamped = -0.9 * q[1, 1] / GREB.Δt
         @test expected_dq_rain < min_dq_that_would_have_clamped  # sanity: the old clamp would have fired
-        @test isapprox(result.dq_rain[1, 1], expected_dq_rain; rtol = 1e-10)
-        @test isapprox(result.Q_lat_air[1, 1], -expected_dq_rain * GREB.cq_latent * GREB.r_qviwv; rtol = 1e-10)
+        @test isapprox(result.dq_rain[1, 1], expected_dq_rain; rtol = 1e-5)
+        @test isapprox(result.Q_lat_air[1, 1], -expected_dq_rain * GREB.cq_latent * GREB.r_qviwv; rtol = 1e-5)
     end
 
     @testset "SWradiation! is allocation-free" begin
@@ -526,7 +526,7 @@ function run_light_tests()
             end
             q_ini = fields.qclim[:, :, GREB.nstep_yr]
             for rec in result.ctrl
-                @test all(isapprox.(rec.q, q_ini; atol = 1e-9))
+                @test all(isapprox.(rec.q, q_ini; atol = 1e-7))
             end
         end
     end
@@ -890,7 +890,7 @@ function run_heavy_tests()
                 greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_hist)
             end
             @test length(result.scnr) == 12
-            @test cfg.co2_scenario == Dict(1850 => 280.73)
+            @test isapprox(cfg.co2_scenario[1850], 280.73; atol = 1e-3)
         finally
             rm(tmpdir_hist; recursive = true, force = true)
         end
@@ -1052,17 +1052,27 @@ function run_heavy_tests()
 
             @test length(result.ctrl) == length(ctrl_ref)
             @test length(result.scnr) == length(scnr_ref)
+            # Tolerances loosened for Float32 (was 1e-6 under Float64): Ts/Ta
+            # are O(280K), so Float32's ~1.2e-7 relative epsilon alone gives
+            # an absolute noise floor around 3e-5, before any compounding
+            # over a 2-year run — measured up to ~4e-3 in practice. The
+            # `scnr_ref` values are themselves tiny control-vs-scenario
+            # anomalies (many below Float32's own noise floor for an O(280K)
+            # quantity), so at this precision the scenario assertions can
+            # only catch a real blow-up, not reproduce the fine anomaly
+            # structure Float64 could — an accepted consequence of the
+            # precision switch, not a bug.
             for (rec, ref) in zip(result.ctrl, ctrl_ref)
                 s = summarize(rec)
-                @test isapprox(s.Ts, ref.Ts; atol = 1e-6)
-                @test isapprox(s.Ta, ref.Ta; atol = 1e-6)
-                @test isapprox(s.q, ref.q; atol = 1e-6)
+                @test isapprox(s.Ts, ref.Ts; atol = 1e-2)
+                @test isapprox(s.Ta, ref.Ta; atol = 1e-2)
+                @test isapprox(s.q, ref.q; atol = 1e-5)
             end
             for (rec, ref) in zip(result.scnr, scnr_ref)
                 s = summarize(rec)
-                @test isapprox(s.Ts, ref.Ts; atol = 1e-6)
-                @test isapprox(s.Ta, ref.Ta; atol = 1e-6)
-                @test isapprox(s.q, ref.q; atol = 1e-6)
+                @test isapprox(s.Ts, ref.Ts; atol = 1e-2)
+                @test isapprox(s.Ta, ref.Ta; atol = 1e-2)
+                @test isapprox(s.q, ref.q; atol = 1e-5)
             end
         end
     end

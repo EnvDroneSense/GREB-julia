@@ -19,15 +19,15 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
     # 1. Ice cover fraction
     @turbo for i in 1:xdim, j in 1:ydim
         T = Ts[i, j]
-        land_expr = ifelse(T <= Tl_ice1, 1.0,
+        land_expr = ifelse(T <= Tl_ice1, 1.0f0,
             ifelse(T < Tl_ice2,
-                1.0 - (T - Tl_ice1) * inv_Tl_ice_range,
-                0.0))
-        ocean_expr = ifelse(T <= To_ice1, 1.0,
+                1.0f0 - (T - Tl_ice1) * inv_Tl_ice_range,
+                0.0f0))
+        ocean_expr = ifelse(T <= To_ice1, 1.0f0,
             ifelse(T < To_ice2,
-                1.0 - (T - To_ice1) * inv_To_ice_range,
-                0.0))
-        ice_cover[i, j] = ifelse(z_topo[i, j] >= 0.0, land_expr, ocean_expr)
+                1.0f0 - (T - To_ice1) * inv_To_ice_range,
+                0.0f0))
+        ice_cover[i, j] = ifelse(z_topo[i, j] >= 0.0f0, land_expr, ocean_expr)
     end
 
     # 2. Atmospheric albedo
@@ -41,15 +41,15 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
             # Land albedo expression
             land_alb = ifelse(T <= Tl_ice1, a_no_ice + da_ice,
                 ifelse(T >= Tl_ice2, a_no_ice,
-                    a_no_ice + da_ice * (1.0 - (T - Tl_ice1) * inv_Tl_ice_range)))
+                    a_no_ice + da_ice * (1.0f0 - (T - Tl_ice1) * inv_Tl_ice_range)))
             # Ocean albedo expression
             ocean_alb = ifelse(T <= To_ice1, a_no_ice + da_ice,
                 ifelse(T >= To_ice2, a_no_ice,
-                    a_no_ice + da_ice * (1.0 - (T - To_ice1) * inv_To_ice_range)))
+                    a_no_ice + da_ice * (1.0f0 - (T - To_ice1) * inv_To_ice_range)))
             # Choose based on topography
-            a_surf[i, j] = ifelse(z_topo[i, j] >= 0.0, land_alb, ocean_alb)
+            a_surf[i, j] = ifelse(z_topo[i, j] >= 0.0f0, land_alb, ocean_alb)
             # Glacier override: if glacier mask > 0.5, set to ice albedo
-            a_surf[i, j] = ifelse(glacier[i, j] > 0.5, a_no_ice + da_ice, a_surf[i, j])
+            a_surf[i, j] = ifelse(glacier[i, j] > 0.5f0, a_no_ice + da_ice, a_surf[i, j])
         end
     else
         @. a_surf = a_no_ice
@@ -57,7 +57,7 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
 
     # 4. albedo + shortwave flux.
     sw_solar = fields.sw_solar
-    multiplier = state.sw_solar_forcing * 0.01 * S0_var
+    multiplier = state.sw_solar_forcing * 0.01f0 * S0_var
     @turbo for j in 1:ydim
         sf = sw_solar[j, ityr] * multiplier
         for i in 1:xdim
@@ -65,7 +65,7 @@ function SWradiation!(Ts, fields::ClimateFields, state::ModelState, timestate, c
             a_atmos[i, j] = aa
             alb = a_surf[i, j] + aa - a_surf[i, j] * aa
             albedo[i, j] = alb
-            sw[i, j] = sf * (1.0 - alb)
+            sw[i, j] = sf * (1.0f0 - alb)
         end
     end
 
@@ -118,7 +118,7 @@ function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::Phy
     end
 
     if !cfg.log_atmos_dmc
-        LW_down .= 0.0
+        LW_down .= 0.0f0
     end
 
     return (LW_surf=LW_surf, LW_up=LW_up, LW_down=LW_down, em=em)

@@ -48,23 +48,23 @@ Base.@kwdef mutable struct PhysicsConfig
     experiment::Symbol = :full_model  # :full_model, :constant_topo, :co2_double, etc.
 
     # CO₂ concentration for experiments (ppm)
-    co2_concentration::Float64 = 340.0
+    co2_concentration::Float32 = 340.0f0
 
     # Orbital-forcing experiments: which solar_scenarios table row to load
     # (:eccentricity / :obliquity, see load_solar_forcing_jld2)
     orbital_index::Int = 0
 
     # Earth-Sun distance experiment: percent change in orbital radius
-    earth_sun_distance_pct::Float64 = 0.0
+    earth_sun_distance_pct::Float32 = 0.0f0
 
     # Hydrology parameters (calculated by set_hydrology_parameters!)
-    c_q::Float64 = 1.0
-    c_rq::Float64 = 0.0
-    c_omega::Float64 = 0.0
-    c_omegastd::Float64 = 0.0
+    c_q::Float32 = 1.0f0
+    c_rq::Float32 = 0.0f0
+    c_omega::Float32 = 0.0f0
+    c_omegastd::Float32 = 0.0f0
 
     # IPCC scenario CO₂ lookup table (year => ppm)
-    co2_scenario::Dict{Int,Float64} = Dict{Int,Float64}()
+    co2_scenario::Dict{Int,Float32} = Dict{Int,Float32}()
 
     # :custom_co2 experiment: path to a user-supplied "year CO2" text file
     # (same format as the IPCC scenario files), loaded into `co2_scenario`
@@ -227,7 +227,7 @@ function set_hydrology_parameters!(cfg::PhysicsConfig)
 
     # NCEP parameter adjustment
     if cfg.log_rain == 0 && cfg.log_clim == 1
-        cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd = -1.27, 1.99, -16.54, 21.15
+        cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd = -1.27f0, 1.99f0, -16.54f0, 21.15f0
     end
 
     @info "⚙️ MSCM hydrology: log_rain=$(cfg.log_rain), log_clim=$(cfg.log_clim) → (c_q=$(cfg.c_q), c_rq=$(cfg.c_rq), c_omega=$(cfg.c_omega), c_omegastd=$(cfg.c_omegastd))"

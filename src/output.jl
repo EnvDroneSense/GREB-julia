@@ -51,26 +51,26 @@ function diagnostics!(it, year, CO2, surf::SurfaceState, tend, fields::ClimateFi
 
         # Global mean and sample points (°C)
         global_mean = sum(state.Tsmn[i, j] * dxlat_grid[j] for i in 1:xdim, j in 1:ydim) /
-                      (xdim * sum(dxlat_grid)) - 273.15
-        point1 = state.Tsmn[48, 27] - 273.15   # Tropical Pacific
-        point2 = state.Tsmn[16, 38] - 273.15   # Hamburg/North Europe
+                      (xdim * sum(dxlat_grid)) - 273.15f0
+        point1 = state.Tsmn[48, 27] - 273.15f0   # Tropical Pacific
+        point2 = state.Tsmn[16, 38] - 273.15f0   # Hamburg/North Europe
 
         println(year, "  ", round(global_mean, digits=2),
             "  ", round(point1, digits=2),
             "  ", round(point2, digits=2))
 
         # Reset accumulators
-        fill!(state.Tsmn, 0.0);
-        fill!(state.Tamn, 0.0);
-        fill!(state.Tomn, 0.0)
-        fill!(state.qmn, 0.0);
-        fill!(state.amn, 0.0)
-        fill!(state.swmn, 0.0);
-        fill!(state.lwmn, 0.0)
-        fill!(state.qlatmn, 0.0);
-        fill!(state.qsensmn, 0.0)
-        fill!(state.ftmn, 0.0);
-        fill!(state.fqmn, 0.0)
+        fill!(state.Tsmn, 0.0f0);
+        fill!(state.Tamn, 0.0f0);
+        fill!(state.Tomn, 0.0f0)
+        fill!(state.qmn, 0.0f0);
+        fill!(state.amn, 0.0f0)
+        fill!(state.swmn, 0.0f0);
+        fill!(state.lwmn, 0.0f0)
+        fill!(state.qlatmn, 0.0f0);
+        fill!(state.qsensmn, 0.0f0)
+        fill!(state.ftmn, 0.0f0);
+        fill!(state.fqmn, 0.0f0)
     end
     return nothing
 end
@@ -153,7 +153,7 @@ function time_loop!(it, year, CO2, mon, irec, Ts, Ta, q, To, output_buf,
     dq_eva_use = tend.dq_eva
     dq_rain_use = tend.dq_rain
     dq_crcl_use = cfg.log_crcl_dmc ? tend.dq_crcl : ws.crcl
-    hydro_on = cfg.log_hydro_dmc ? 1.0 : 0.0
+    hydro_on = cfg.log_hydro_dmc ? 1.0f0 : 0.0f0
 
     SW = tend.SW; LW_surf = tend.LW_surf; LW_down = tend.LW_down
     Q_lat = tend.Q_lat; Q_sens = tend.Q_sens; dTa_crcl = tend.dTa_crcl

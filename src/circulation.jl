@@ -21,7 +21,7 @@ topographic weighting field.
 """
 function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate)
     # Zero output buffer (we will accumulate into it)
-    fill!(ws.dX_diff, 0.0)
+    fill!(ws.dX_diff, 0.0f0)
 
     # Topographic scaling (choose based on scale height)
     wz = if h_scl == z_air
@@ -69,7 +69,7 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
         end
 
         # ----- Zonal diffusion -----
-        if dxlat[k] > 2.5e5   # mid‑latitudes, normal time step
+        if dxlat[k] > 2.5f5   # mid‑latitudes, normal time step
             @turbo for j in 1:xdim
                 jm1v = jm1[j];
                 jp1v = jp1[j]
@@ -78,16 +78,16 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 jm3v = jm3[j];
                 jp3v = jp3[j]
 
-                dTx = ccx[k] * 0.05 * (
-                    10.0 * (wz[jm1v, k] * (T1[jm1v, k] - T1[j, k]) +
+                dTx = ccx[k] * 0.05f0 * (
+                    10.0f0 * (wz[jm1v, k] * (T1[jm1v, k] - T1[j, k]) +
                             wz[jp1v, k] * (T1[jp1v, k] - T1[j, k])) +
-                    4.0 * (wz[jm2v, k] * (T1[jm2v, k] - T1[jm1v, k]) +
+                    4.0f0 * (wz[jm2v, k] * (T1[jm2v, k] - T1[jm1v, k]) +
                            wz[jm1v, k] * (T1[j, k] - T1[jm1v, k])) +
-                    4.0 * (wz[jp1v, k] * (T1[j, k] - T1[jp1v, k]) +
+                    4.0f0 * (wz[jp1v, k] * (T1[j, k] - T1[jp1v, k]) +
                            wz[jp2v, k] * (T1[jp2v, k] - T1[jp1v, k])) +
-                    1.0 * (wz[jm3v, k] * (T1[jm3v, k] - T1[jm2v, k]) +
+                    1.0f0 * (wz[jm3v, k] * (T1[jm3v, k] - T1[jm2v, k]) +
                            wz[jm2v, k] * (T1[jm1v, k] - T1[jm2v, k])) +
-                    1.0 * (wz[jp2v, k] * (T1[jp1v, k] - T1[jp2v, k]) +
+                    1.0f0 * (wz[jp2v, k] * (T1[jp1v, k] - T1[jp2v, k]) +
                            wz[jp3v, k] * (T1[jp3v, k] - T1[jp2v, k]))
                 )
                 ws.dX_diff[j, k] += wz[j, k] * dTx
@@ -110,21 +110,21 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                     jm3v = jm3[j];
                     jp3v = jp3[j]
 
-                    ws.dTxh[j] = ccx2 * 0.05 * (
-                        10.0 * (wz[jm1v, k] * (ws.T1h[jm1v] - ws.T1h[j]) +
+                    ws.dTxh[j] = ccx2 * 0.05f0 * (
+                        10.0f0 * (wz[jm1v, k] * (ws.T1h[jm1v] - ws.T1h[j]) +
                                 wz[jp1v, k] * (ws.T1h[jp1v] - ws.T1h[j])) +
-                        4.0 * (wz[jm2v, k] * (ws.T1h[jm2v] - ws.T1h[jm1v]) +
+                        4.0f0 * (wz[jm2v, k] * (ws.T1h[jm2v] - ws.T1h[jm1v]) +
                                wz[jm1v, k] * (ws.T1h[j] - ws.T1h[jm1v])) +
-                        4.0 * (wz[jp1v, k] * (ws.T1h[j] - ws.T1h[jp1v]) +
+                        4.0f0 * (wz[jp1v, k] * (ws.T1h[j] - ws.T1h[jp1v]) +
                                wz[jp2v, k] * (ws.T1h[jp2v] - ws.T1h[jp1v])) +
-                        1.0 * (wz[jm3v, k] * (ws.T1h[jm3v] - ws.T1h[jm2v]) +
+                        1.0f0 * (wz[jm3v, k] * (ws.T1h[jm3v] - ws.T1h[jm2v]) +
                                wz[jm2v, k] * (ws.T1h[jm1v] - ws.T1h[jm2v])) +
-                        1.0 * (wz[jp2v, k] * (ws.T1h[jp1v] - ws.T1h[jp2v]) +
+                        1.0f0 * (wz[jp2v, k] * (ws.T1h[jp1v] - ws.T1h[jp2v]) +
                                wz[jp3v, k] * (ws.T1h[jp3v] - ws.T1h[jp2v]))
                     )
                 end
                 @turbo for j in 1:xdim
-                    dq = ifelse(ws.dTxh[j] <= -ws.T1h[j], -0.9 * ws.T1h[j], ws.dTxh[j])
+                    dq = ifelse(ws.dTxh[j] <= -ws.T1h[j], -0.9f0 * ws.T1h[j], ws.dTxh[j])
                     ws.T1h[j] += dq
                 end
             end
@@ -147,12 +147,12 @@ tendency into `ws.dX_adv`. Gated by `cfg.log_hadv`/`cfg.log_vadv` depending on
 function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
     # Disable advection for water vapour or heat according to switches
     if (h_scl == z_vapor && !cfg.log_vadv) || (h_scl == z_air && !cfg.log_hadv)
-        fill!(ws.dX_adv, 0.0)
+        fill!(ws.dX_adv, 0.0f0)
         return nothing
     end
 
     # Pre-zero the output buffer (we will accumulate into it)
-    fill!(ws.dX_adv, 0.0)
+    fill!(ws.dX_adv, 0.0f0)
 
     # Extract 2D views for current time step
     vclim_p_t = @view fields.vclim_p[:, :, timestate.ityr]
@@ -183,7 +183,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 ws.dX_adv[j, k] += ccy * v_p * (
                     wz[j, 2] * (T1[j, 1] - T1[j, 2]) +
                     wz[j, 3] * (T1[j, 1] - T1[j, 3])
-                ) / 3.0
+                ) / 3.0f0
             end
         elseif k == 2
             @turbo for j in 1:xdim
@@ -192,7 +192,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 ws.dX_adv[j, k] += ccy * (
                     -v_m * wz[j, 1] * (T1[j, 2] - T1[j, 1]) +
                     v_p * (wz[j, 3] * (T1[j, 2] - T1[j, 3]) +
-                           wz[j, 4] * (T1[j, 2] - T1[j, 4])) / 3.0
+                           wz[j, 4] * (T1[j, 2] - T1[j, 4])) / 3.0f0
                 )
             end
         elseif k >= 3 && k <= ydim-2
@@ -206,7 +206,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                             wz[j, km2] * (T1[j, k] - T1[j, km2])) +
                     v_p * (wz[j, kp1] * (T1[j, k] - T1[j, kp1]) +
                            wz[j, kp2] * (T1[j, k] - T1[j, kp2]))
-                ) / 3.0
+                ) / 3.0f0
             end
         elseif k == ydim-1
             @turbo for j in 1:xdim
@@ -216,7 +216,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 v_p = vclim_p_t[j, k]
                 ws.dX_adv[j, k] += ccy * (
                     -v_m * (wz[j, km1] * (T1[j, k] - T1[j, km1]) +
-                            wz[j, km2] * (T1[j, k] - T1[j, km2])) / 3.0 +
+                            wz[j, km2] * (T1[j, k] - T1[j, km2])) / 3.0f0 +
                     v_p * wz[j, kp1] * (T1[j, k] - T1[j, kp1])
                 )
             end
@@ -227,7 +227,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 ws.dX_adv[j, k] += ccy * (
                     -v_m * (wz[j, km1] * (T1[j, k] - T1[j, km1]) +
                             wz[j, km2] * (T1[j, k] - T1[j, km2]))
-                ) / 3.0
+                ) / 3.0f0
             end
         end
 
@@ -243,7 +243,7 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                             wz[jm2, k] * (T1[j, k] - T1[jm2, k])) +
                     u_p * (wz[jp1, k] * (T1[j, k] - T1[jp1, k]) +
                            wz[jp2, k] * (T1[j, k] - T1[jp2, k]))
-                ) / 3.0
+                ) / 3.0f0
             end
         else # polar regions – sub‑timestepping
             # Number of sub‑steps (CFL stability. Precomputed, depends only on k)
@@ -263,17 +263,17 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                     u_p = uclim_p_t[j, k]
 
                     ws.dTxh[j] = ccx2 * (
-                        -u_m * (10.0 * wz[jm1, k] * (ws.T1h[j] - ws.T1h[jm1]) +
-                                4.0 * wz[jm2, k] * (ws.T1h[jm1] - ws.T1h[jm2]) +
-                                1.0 * wz[jm3, k] * (ws.T1h[jm2] - ws.T1h[jm3])) +
-                        u_p * (10.0 * wz[jp1, k] * (ws.T1h[j] - ws.T1h[jp1]) +
-                               4.0 * wz[jp2, k] * (ws.T1h[jp1] - ws.T1h[jp2]) +
-                               1.0 * wz[jp3, k] * (ws.T1h[jp2] - ws.T1h[jp3]))
-                    ) / 20.0
+                        -u_m * (10.0f0 * wz[jm1, k] * (ws.T1h[j] - ws.T1h[jm1]) +
+                                4.0f0 * wz[jm2, k] * (ws.T1h[jm1] - ws.T1h[jm2]) +
+                                1.0f0 * wz[jm3, k] * (ws.T1h[jm2] - ws.T1h[jm3])) +
+                        u_p * (10.0f0 * wz[jp1, k] * (ws.T1h[j] - ws.T1h[jp1]) +
+                               4.0f0 * wz[jp2, k] * (ws.T1h[jp1] - ws.T1h[jp2]) +
+                               1.0f0 * wz[jp3, k] * (ws.T1h[jp2] - ws.T1h[jp3]))
+                    ) / 20.0f0
                 end
                 @turbo for j in 1:xdim
                     # Stability clamp (avoid negative water vapour)
-                    dq = ifelse(ws.dTxh[j] <= -ws.T1h[j], -0.9 * ws.T1h[j], ws.dTxh[j])
+                    dq = ifelse(ws.dTxh[j] <= -ws.T1h[j], -0.9f0 * ws.T1h[j], ws.dTxh[j])
                     ws.T1h[j] += dq
                 end
             end
@@ -297,7 +297,7 @@ loop is a genuine sequential recurrence and is not parallelized.
 function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::CirculationWorkspace, timestate, cfg::PhysicsConfig)
     # Early exit if atmospheric processes disabled
     if (!cfg.log_atmos_dmc || !cfg.log_crcl_dmc || !cfg.log_crcl_drsp)
-        fill!(dX_out, 0.0)
+        fill!(dX_out, 0.0f0)
         return nothing
     end
 
@@ -310,9 +310,9 @@ function circulation!(X_in, h_scl, dX_out, fields::ClimateFields, ws::Circulatio
 
     copyto!(ws.X_work, X_in)
 
-    fill!(ws.dX_diff, 0.0)
-    fill!(ws.dX_adv, 0.0)
-    fill!(ws.dX_conv, 0.0)
+    fill!(ws.dX_diff, 0.0f0)
+    fill!(ws.dX_adv, 0.0f0)
+    fill!(ws.dX_conv, 0.0f0)
 
     for _tt in 1:ntime
         do_diff_v && diffusion!(ws.X_work, h_scl, fields, ws, timestate)

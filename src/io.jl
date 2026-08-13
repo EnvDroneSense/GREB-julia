@@ -59,7 +59,7 @@ function load_solar_forcing_jld2(jld2_dir::String, forcing_type::Symbol, index::
 end
 
 """
-    load_co2_scenario_jld2(jld2_dir::String, scenario::Symbol) -> Dict{Int,Float64}
+    load_co2_scenario_jld2(jld2_dir::String, scenario::Symbol) -> Dict{Int,Float32}
 
 Loads a `year => CO2` (ppm-equivalent) lookup table for an IPCC scenario
 (e.g. `:ssp585`, `:rcp85`) from the combined `scenario/ipcc_scenarios.jld2`.
@@ -74,11 +74,11 @@ function load_co2_scenario_jld2(jld2_dir::String, scenario::Symbol)
     key = string(scenario)
     haskey(scenarios, key) ||
         error("No CO2 scenario table for \"$key\" in $filepath. Available: $(sort(collect(keys(scenarios))))")
-    return scenarios[key]
+    return Dict{Int,Float32}(yr => Float32(co2) for (yr, co2) in scenarios[key])
 end
 
 """
-    load_custom_co2_scenario(path::String) -> Dict{Int,Float64}
+    load_custom_co2_scenario(path::String) -> Dict{Int,Float32}
 
 Loads a `year => CO2` lookup table for the `:custom_co2` experiment from a
 plain-text file, one `year CO2` pair per line. Blank lines
@@ -86,14 +86,14 @@ and lines starting with `#` are skipped.
 """
 function load_custom_co2_scenario(path::String)
     isfile(path) || error("Custom CO2 scenario file not found: $path")
-    table = Dict{Int,Float64}()
+    table = Dict{Int,Float32}()
     for line in eachline(path)
         stripped = strip(line)
         (isempty(stripped) || startswith(stripped, "#")) && continue
         cols = split(stripped)
         length(cols) >= 2 ||
             error("Malformed line in custom CO2 scenario file $path: \"$line\" (expected \"year CO2\")")
-        table[parse(Int, cols[1])] = parse(Float64, cols[2])
+        table[parse(Int, cols[1])] = parse(Float32, cols[2])
     end
     return table
 end

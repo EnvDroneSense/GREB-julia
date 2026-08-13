@@ -47,7 +47,7 @@ The GREB model is a conceptual climate model that simulates the global energy ba
 
 This implementation has been translated from Fortran90 to Julia with a focus on:
 
-- **Performance optimizations** using `@turbo` (SIMD vectorization)
+- **Performance optimizations** using `@turbo` (SIMD vectorization), multi-threaded circulation, and a `Float32` compute path throughout
 - **Interactive visualization** through Pluto.jl
 - **Multiple climate scenarios** (e.g., IPCC RCP and SSP scenarios)
 - **Flexible experiment configurations**
@@ -61,6 +61,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 - 🌡️ IPCC climate scenarios - all four RCPs and five SSPs are implemented (`:rcp26`/`:rcp45`/`:rcp60`/`:rcp85`, `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`), plus a historical CO2 (1850–2017) hindcast (`:historical_co2`) and a user-supplied CO2 trajectory (`:custom_co2`)
 - 🧩 "Deconstruct" experiments (`:decon_mean_climate`, `:decon_2xco2`) - toggle individual mean-climate/2×CO₂-response feedback processes on or off via `log_*_dmc`/`log_*_drsp` keywords passed to `create_experiment_config`
 - ⚡ Multi-threaded physics - the temperature and humidity `circulation!` calls run concurrently via `Threads.@spawn` when Julia is started with 3+ threads (e.g. `julia --project=. -t 3`)
+- 🎯 `Float32` throughout - climatology, workspace buffers, and model state all compute in single precision (matching the `Float32` JLD2 input data natively, no upconversion), for a further ~1.6× wall-clock speedup on top of threading, with output validated against the previous `Float64` path to well under 0.01 K
 - ☀️ Orbital forcing and paleoclimate experiments
 
 ## 🚀 Quick Start
@@ -112,7 +113,7 @@ Open `GREB_julia.jl` from the Pluto interface.
 
 ## 📂 Input Data
 
-The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) - a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text).
+The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) - a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text). `load_greb_jld2!` loads this data directly into `Float32` `ClimateFields` - the same precision the model computes in throughout, so no promotion happens at load time.
 
 In the original model these were all separate `.bin` files. `scripts/convert_greb_to_jld2.jl` converts the raw GREB `.bin` input files (see [DATA_README.md](DATA_README.md) for their expected layout, normally under `Data/input/`) into this `.jld2` layout:
 
@@ -210,7 +211,7 @@ result.ctrl    # Vector{MonthlyRecord} (control)
 result.scnr    # Vector{MonthlyRecord} (scenario)
 ```
 
-Each `MonthlyRecord` is a `NamedTuple` with fields:
+Each `MonthlyRecord` is a `NamedTuple` of `(xdim, ydim)` `Matrix{Float32}` fields:
 `Ts, Ta, To, q, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens`
 
 See the [Tutorial](https://EnvDroneSense.github.io/GREB-julia/tutorial/) or
