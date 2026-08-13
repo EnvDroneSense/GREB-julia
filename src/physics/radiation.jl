@@ -111,10 +111,11 @@ function LWradiation!(Ts, Ta, q, CO2, fields::ClimateFields, timestate, cfg::Phy
             em_val = (p8 - cldclim[i, j, ityr]) / p9 * (em_val - p10) + p10
             em[i, j] = em_val
             LW_surf[i, j] = -σ * Ts[i, j]^4
-            LW_down[i, j] = -em_val * σ * (Ta[i, j] + dTrad[i, j, ityr])^4
+            LW_down_val = -em_val * σ * (Ta[i, j] + dTrad[i, j, ityr])^4
+            LW_down[i, j] = LW_down_val
+            LW_up[i, j] = LW_down_val
         end
     end
-    LW_up .= LW_down
 
     if !cfg.log_atmos_dmc
         LW_down .= 0.0

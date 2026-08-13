@@ -93,11 +93,9 @@ function diffusion!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 ws.dX_diff[j, k] += wz[j, k] * dTx
             end
         else   # polar regions – sub‑timestepping
-            # Number of sub‑steps for stability
-            dd = max(1, round(Int, Δt_crcl / (dxlat[k]^2 / κ)))
-            dtdff2 = Δt_crcl / dd
-            time2 = max(1, round(Int, Δt_crcl / dtdff2))
-            ccx2 = κ * dtdff2 / dxlat[k]^2
+            # Number of sub‑steps for stability (precomputed, depends only on k)
+            time2 = POLAR_DIFF_TIME2[k]
+            ccx2 = POLAR_DIFF_CCX2[k]
 
             # Copy current row into temporary buffer
             ws.T1h .= @view T1[:, k]
@@ -248,11 +246,9 @@ function advection!(T1, h_scl, fields::ClimateFields, ws::CirculationWorkspace, 
                 ) / 3.0
             end
         else # polar regions – sub‑timestepping
-            # Number of sub‑steps (CFL stability)
-            dd = max(1, round(Int, Δt_crcl / (dxlat[k] / 10.0)))
-            dtdff2 = Δt_crcl / dd
-            time2 = max(1, round(Int, Δt_crcl / dtdff2))
-            ccx2 = dtdff2 / dxlat[k] / 2.0
+            # Number of sub‑steps (CFL stability. Precomputed, depends only on k)
+            time2 = POLAR_ADV_TIME2[k]
+            ccx2 = POLAR_ADV_CCX2[k]
 
             # Copy current row into temporary buffer
             ws.T1h .= @view T1[:, k]

@@ -97,19 +97,19 @@ function output!(it, irec, mon, surf::SurfaceState, tend, ws::CirculationWorkspa
         ndm = cjday_mon[mon] * ndt_days
         irec += 1
         push!(output_buf, (
-            Ts=copy(acc.Tmm ./ ndm),
-            Ta=copy(acc.Tamm ./ ndm),
-            To=copy(acc.Tomm ./ ndm),
-            q=copy(acc.qmm ./ ndm),
-            albedo=copy(acc.apmm ./ ndm),
-            ice=copy(acc.icemm ./ ndm),
-            precip=copy(acc.precipmm ./ ndm),
-            evap=copy(acc.evapmm ./ ndm),
-            qcrcl=copy(acc.qcrclmm ./ ndm),
-            sw=copy(acc.swmm ./ ndm),
-            lw=copy(acc.lwmm ./ ndm),
-            qlat=copy(acc.qlatmm ./ ndm),
-            qsens=copy(acc.qsensmm ./ ndm)
+            Ts=acc.Tmm ./ ndm,
+            Ta=acc.Tamm ./ ndm,
+            To=acc.Tomm ./ ndm,
+            q=acc.qmm ./ ndm,
+            albedo=acc.apmm ./ ndm,
+            ice=acc.icemm ./ ndm,
+            precip=acc.precipmm ./ ndm,
+            evap=acc.evapmm ./ ndm,
+            qcrcl=acc.qcrclmm ./ ndm,
+            sw=acc.swmm ./ ndm,
+            lw=acc.lwmm ./ ndm,
+            qlat=acc.qlatmm ./ ndm,
+            qsens=acc.qsensmm ./ ndm
         ))
         reset!(acc)
         mon = mon == 12 ? 1 : mon + 1

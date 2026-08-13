@@ -144,3 +144,28 @@ begin
     const polar_treshold = 2.5e5  # 250 km in meters
     const IS_POLAR = [dxlat_grid[k] <= polar_treshold for k in 1:ydim]
 end;
+
+begin
+    # ── Polar sub-stepping constants (diffusion!/advection!) ──────────────
+    # `dd`/`dtdff2`/`time2`/`ccx2` in the polar branches of `diffusion!` and
+    # `advection!` depend only on `k` (via `dxlat_grid[k]`) and fixed module
+    # constants. Precomputed once here, indexed by `k`; only the `IS_POLAR[k]`/
+    # `dxlat[k] <= 2.5e5` rows are ever actually read at these indices.
+    function _polar_diff_step(k)
+        dd = max(1, round(Int, Δt_crcl / (dxlat_grid[k]^2 / κ)))
+        dtdff2 = Δt_crcl / dd
+        time2 = max(1, round(Int, Δt_crcl / dtdff2))
+        return (time2=time2, ccx2=κ * dtdff2 / dxlat_grid[k]^2)
+    end
+    function _polar_adv_step(k)
+        dd = max(1, round(Int, Δt_crcl / (dxlat_grid[k] / 10.0)))
+        dtdff2 = Δt_crcl / dd
+        time2 = max(1, round(Int, Δt_crcl / dtdff2))
+        return (time2=time2, ccx2=dtdff2 / dxlat_grid[k] / 2.0)
+    end
+
+    const POLAR_DIFF_TIME2 = [_polar_diff_step(k).time2 for k in 1:ydim]
+    const POLAR_DIFF_CCX2 = [_polar_diff_step(k).ccx2 for k in 1:ydim]
+    const POLAR_ADV_TIME2 = [_polar_adv_step(k).time2 for k in 1:ydim]
+    const POLAR_ADV_CCX2 = [_polar_adv_step(k).ccx2 for k in 1:ydim]
+end;
