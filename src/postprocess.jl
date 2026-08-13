@@ -47,7 +47,7 @@ Returns `ctrl_output`'s `ice` field from the *final* year, as an
 `(xdim, ydim, 12)` array.
 """
 function compute_annual_ice_climatology(ctrl_output::Vector{MonthlyRecord})
-    ice_months = zeros(Float64, xdim, ydim, 12)
+    ice_months = zeros(Float32, xdim, ydim, 12)
     isempty(ctrl_output) && return ice_months
 
     nmonths = 12

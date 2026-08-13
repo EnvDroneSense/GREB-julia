@@ -16,24 +16,24 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     # calls (the default is a fresh ClimateFields() per call); a regional
     # experiment run earlier against the same fields instance would otherwise
     # leak its stale mask into a later, unrelated run against it.
-    fields.co2_part .= 1.0
+    fields.co2_part .= 1.0f0
 
     if cfg.experiment == :regional_co2_nh
-        fields.co2_part[:, 1:24] .= 0.5
+        fields.co2_part[:, 1:24] .= 0.5f0
     elseif cfg.experiment == :regional_co2_sh
-        fields.co2_part[:, 25:48] .= 0.5
+        fields.co2_part[:, 25:48] .= 0.5f0
     elseif cfg.experiment == :regional_co2_tropics
-        fields.co2_part[:, 1:15] .= 0.5
-        fields.co2_part[:, 33:48] .= 0.5
+        fields.co2_part[:, 1:15] .= 0.5f0
+        fields.co2_part[:, 33:48] .= 0.5f0
         for i in 4:4:96
-            fields.co2_part[i, 33] = 1.0
-            fields.co2_part[i, 15] = 1.0
+            fields.co2_part[i, 33] = 1.0f0
+            fields.co2_part[i, 15] = 1.0f0
         end
     elseif cfg.experiment == :regional_co2_extratropics
-        fields.co2_part[:, 16:32] .= 0.5
+        fields.co2_part[:, 16:32] .= 0.5f0
         for i in 4:4:96
-            fields.co2_part[i, 32] = 1.0
-            fields.co2_part[i, 16] = 1.0
+            fields.co2_part[i, 32] = 1.0f0
+            fields.co2_part[i, 16] = 1.0f0
         end
     end
 
@@ -41,39 +41,39 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     z_topo = fields.z_topo
 
     # ── dTrad: offset between T_atm and radiation temperature ────
-    @. fields.dTrad = -0.16 * Tclim - 5.0
+    @. fields.dTrad = -0.16f0 * Tclim - 5.0f0
 
     # ── z_ocean: 3× maximum mixed-layer depth over the year ──────
-    fields.z_ocean .= 3.0 .* dropdims(maximum(fields.mldclim; dims=3); dims=3)
+    fields.z_ocean .= 3.0f0 .* dropdims(maximum(fields.mldclim; dims=3); dims=3)
 
     # ── Sensitivity experiment overrides ─────────────────────────
     if !cfg.log_topo_drsp
-        @. z_topo = min(z_topo, 1.0)       # constant topography
+        @. z_topo = min(z_topo, 1.0f0)       # constant topography
     end
 
     # Apply cloud deconstruction switch
     if !cfg.log_clouds_dmc
-        fields.cldclim .= 0.0  # zero cloud climatology
+        fields.cldclim .= 0.0f0  # zero cloud climatology
     end
 
     # Apply flux correction conditional zeroing (MSCM feature)
     if !cfg.log_topo_drsp && !cfg.log_qflux_dmc
-        fields.TF_correct .= 0.0
-        fields.qF_correct .= 0.0
-        fields.ToF_correct .= 0.0
+        fields.TF_correct .= 0.0f0
+        fields.qF_correct .= 0.0f0
+        fields.ToF_correct .= 0.0f0
     end
 
     # Climatology modifications
     if !cfg.log_hydro_dmc
-        fields.qclim .= 0.0  # zero out humidity climatology
+        fields.qclim .= 0.0f0  # zero out humidity climatology
     end
 
     if !cfg.log_clouds_drsp
-        fields.cldclim .= 0.7           # constant cloud cover (2xCO2 deconstruction)
+        fields.cldclim .= 0.7f0           # constant cloud cover (2xCO2 deconstruction)
     end
 
     if !cfg.log_humid_drsp
-        fields.qclim .= 0.0052          # constant water vapor
+        fields.qclim .= 0.0052f0          # constant water vapor
     end
 
     if !cfg.log_ocean_drsp
@@ -111,14 +111,14 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
 
     # ── hydro!'s log_rain==1 rain-limit divisor: depends only on wz_vapor,
     # invariant for the whole run
-    @. fields.rain_limit = -0.0015 / (fields.wz_vapor * r_qviwv * 86400.0)
+    @. fields.rain_limit = -0.0015f0 / (fields.wz_vapor * r_qviwv * 86400.0f0)
 
     # ── Surface heat capacity ────────────────────────────────────
     cap_surf = fields.cap_surf
     mldclim = fields.mldclim
     @inbounds for j in 1:ydim
         for i in 1:xdim
-            if z_topo[i, j] > 0.0
+            if z_topo[i, j] > 0.0f0
                 cap_surf[i, j] = cap_land
             else
                 cap_surf[i, j] = cfg.log_ocean_dmc ? cap_ocean * mldclim[i, j, 1] : cap_land
@@ -136,14 +136,14 @@ function init_model!(cfg::PhysicsConfig, fields::ClimateFields)
     CO2_ctrl = cfg.co2_concentration
 
     if cfg.experiment == :a1b_scenario
-        CO2_ctrl = 298.0  # A1B scenario baseline
+        CO2_ctrl = 298.0f0  # A1B scenario baseline
     elseif cfg.experiment in (:a1b_enhanced, :rcp26, :rcp45, :rcp60, :rcp85, :custom_co2,
                                :ssp119, :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2)
-        CO2_ctrl = 280.0  # IPCC scenarios baseline
+        CO2_ctrl = 280.0f0  # IPCC scenarios baseline
     end
 
     if !cfg.log_co2_dmc
-        CO2_ctrl = 0.0  # 0 CO2 for deconstruction experiments
+        CO2_ctrl = 0.0f0  # 0 CO2 for deconstruction experiments
     end
 
     return (Ts_ini=Ts_ini, Ta_ini=Ta_ini, To_ini=To_ini,
@@ -284,7 +284,7 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
 
     # Workspace and accumulator. `ws_a`/`ws_q` are separate `circulation!`
     # scratch spaces so the Ta/q circulation calls inside `tendencies!` can
-    # run concurrently on `Threads.nthreads() > 1` 
+    # run concurrently on `Threads.nthreads() > 1`
     ws = CirculationWorkspace()
     ws_a = CirculationWorkspace()
     ws_q = CirculationWorkspace()
@@ -316,7 +316,7 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     Ta = copy(Ta_ini)
     To = copy(To_ini);
     q = copy(q_ini)
-    state.sw_solar_forcing = 1.0
+    state.sw_solar_forcing = 1.0f0
     mon = 1;
     year = 1970;
     irec = 0
@@ -365,11 +365,11 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
     q .= q_ini;
     To .= To_ini
     year = is_orbital_exp ? 1 : (is_historical_exp ? 1850 : 1950)
-    CO2 = 340.0;
+    CO2 = 340.0f0;
     mon = 1;
     irec = 0
 
-    state.sw_solar_forcing = 1.0
+    state.sw_solar_forcing = 1.0f0
     reset!(acc)  # Use accumulator reset
 
     scnr_output = MonthlyRecord[]
@@ -393,7 +393,7 @@ function greb_model!(run::RunSpec, cfg::PhysicsConfig;
         if is_sst_plus1
             CO2 = CO2_ctrl
             ityr_now = mod(it - 1, nstep_yr) + 1
-            @. Ts = ifelse(fields.z_topo < 0.0, fields.Tclim[:, :, ityr_now] + 1.0, Ts)
+            @. Ts = ifelse(fields.z_topo < 0.0f0, fields.Tclim[:, :, ityr_now] + 1.0f0, Ts)
         end
 
         (mon, irec) = time_loop!(it, year, CO2, mon, irec,

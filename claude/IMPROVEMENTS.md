@@ -105,7 +105,7 @@ Grid dimensions and physical constants in `src/constants.jl` are `const`.
 Direct consequence of §1.1 — climatology arrays are `ClimateFields` fields,
 allocated only when constructed, not at `using GREB` time.
 
-### 2.3 `Float32` for climatology/working fields — analyzed and benchmarked, not implemented
+### 2.3 `Float32` for climatology/working fields — ✅ done (2026-08-13)
 Retyping just the static (JLD2-native-`Float32`) climatology is safe, but
 `init_model!`'s `copy(Tclim[:,:,end])`-style inits would silently downgrade
 the *working* simulation state (`Ts`/`Ta`/`To`/`q`) too without an explicit
@@ -158,6 +158,105 @@ it, which costs far more than the gather ever did. **Rejected**: this is
 worse than doing nothing on every axis (correctness aside), confirming the
 `@turbo`-compatibility risk flagged before running the experiment. Script:
 `benchmark/circular_arrays_experiment.jl`.
+
+**Re-review (2026-08-13) — different verdict for non-gather kernels, still
+not implemented.** The original analysis above only ever tested
+`circulation!` (gather-bound via the periodic-longitude index arrays). Redid
+the Float32-vs-Float64 comparison fresh on this machine/Julia version,
+*and* extended it to `hydro!`/`LWradiation!`-style kernels, which are pure
+elementwise (no neighbor gather at all — every read is at `[i,j]`, nothing
+offset):
+
+| Kernel shape | `Float64` | `Float32` | Speedup |
+|---|---|---|---|
+| Gather-bound (`circulation!`-style zonal diffusion) | 210.5 ns | 220.9 ns | **0.95× (no gain, slightly slower)** |
+| Pure elementwise, no gather (`hydro!`-style) | 8733 ns | 2889 ns | **3.02×** |
+| Transcendental-heavy elementwise (`LWradiation!`-style, `log()` calls) | 29800 ns | 11300 ns | **2.64×** |
+
+So the original "not worth it" conclusion still holds for `circulation!`
+itself — on this machine Float32 doesn't even keep its earlier claimed
+5-10%, confirming it's not the lever for the dominant 65-75%-of-runtime
+kernel. But `hydro!`/`LWradiation!`/`ocean!`'s elementwise kernels (no
+gather to fight) show a genuine **2.6-3× speedup**, never tested before —
+plausibly double SIMD lane width plus faster `exp`/`log`/`sqrt` at single
+precision. These three together are a meaningful chunk of the ~25-35% of
+per-timestep cost that isn't circulation (§2.10), so a 2.6-3× speedup there
+could plausibly be a double-digit-percent full-model win — bigger than
+anything in §2.15 and in the same league as §2.11's threading win.
+Precision check: accumulating 730 `Float32` additions of O(250) values (a
+proxy for `diagnostics!`/`output!`'s annual-mean accumulators) against the
+same in `Float64` gives a relative error of ~2e-7 — negligible if the
+*accumulator* arrays stay `Float64` and only per-timestep working buffers
+go to `Float32`.
+**Not implemented, and not a quick follow-up**: this would need a real
+design decision, not a drop-in change — `ClimateFields`/`CirculationWorkspace`
+are concrete non-parametric `Float64` structs (same blocker as before), a
+mixed-precision split (elementwise physics in `Float32`, circulation and
+accumulators in `Float64`) means crossing precision boundaries at several
+call sites, and any change here needs validation against the Fortran
+reference over full multi-decade runs, not just a standalone kernel diff.
+Worth a dedicated pass if the user wants to pursue it — flagging it here as
+reopened, not reclosed.
+
+**Implemented (2026-08-13) — full conversion, plus the fix that made the
+gather kernel benefit too.** Investigating the "not worth it for
+`circulation!`" result further (per user question) turned up the actual
+cause: the gather-kernel comparison above changed the data to `Float32`
+but left the periodic-longitude index arrays (`lon_jm1`/`lon_jp1`/`lon_jm2`/
+`lon_jp2`/`lon_jm3`/`lon_jp3`) as `Int64` — a width mismatch.
+`LoopVectorization` needs matching-width gather addresses; `Float32` data
+gathered through `Int64` indices nearly *doubled* the gather-instruction
+count (15→28) instead of halving it. Narrowing the index arrays to `Int32`
+alongside the data dropped the count back to 15 and made the kernel
+genuinely faster than the `Float64`/`Int64` baseline (~245ns → ~175ns,
+confirmed reproducible across 3 runs) — reversing the "not worth it"
+verdict for `circulation!` itself, not just the elementwise kernels.
+
+Given that, converted the whole model to `Float32` end-to-end, per explicit
+user decision on scope (not a mixed-precision split):
+- `ClimateFields`/`CirculationWorkspace`/`SurfaceState`/`MonthlyAccumulator`/
+  `ModelState`/`MonthlyRecord` (`state.jl`): every field retyped, including
+  the public output (`MonthlyRecord` is now `Matrix{Float32}`, not promoted
+  back to `Float64`).
+- `PhysicsConfig`'s numeric fields (`co2_concentration`, `c_q`/`c_rq`/
+  `c_omega`/`c_omegastd`, `earth_sun_distance_pct`, `co2_scenario::Dict{Int,
+  Float32}`) — also converted, not just cast locally, so a stray `Float64`
+  scalar can't re-promote an elementwise kernel back to double precision.
+- `lon_jm1`/`lon_jp1`/`lon_jm2`/`lon_jp2`/`lon_jm3`/`lon_jp3` → `Int32` (the
+  fix above), plus every other `constants.jl` physical/derived constant.
+- Every bare `Float64` literal inside a `@turbo` loop across
+  `circulation.jl`, `physics/hydrology.jl`, `physics/radiation.jl`,
+  `physics/ocean.jl`, `output.jl`, `model.jl`, `tendencies.jl` got an `f0`
+  suffix — the highest-risk, most mechanical part of the change, since one
+  missed literal silently re-promotes that loop to `Float64` and reproduces
+  the original false-negative. One simplification found along the way:
+  plain integer literals (`3`, `4`, `20`) do **not** need suffixing —
+  `Float32 op Int` promotes to `Float32` in Julia, not `Float64`; only
+  literals with a decimal point/exponent do.
+- `load_greb_jld2!` no longer upconverts at all — JLD2 data is already
+  `Float32`, so loading is now a same-type copy instead of a promotion (a
+  small free win on top).
+
+**Verification**: full 438-test suite passes (6 tests needed tolerance
+loosening — `atol=1e-9`/`rtol=1e-10` style assertions to `~1e-5`–`1e-4`,
+an expected consequence of the precision switch, not a workaround; two
+`==` comparisons against `Float64` literal tuples/dicts needed `isapprox`
+since a round-tripped `Float32` literal doesn't compare exactly equal to
+the original `Float64` literal). Numeric sanity check (1-year control run,
+`Float32` vs. a saved `Float64` reference from before the change): max
+absolute difference 0.0036 K on `Ts`, 0.00086 K on `Ta`, 0.003 K on `To`,
+2e-7 kg/kg on `q` — physically negligible, and the printed annual
+diagnostic line matched the `Float64` baseline to 2 decimal places.
+`@code_native` on the real (not standalone) `diffusion!` confirmed no
+`cvtss2sd`/`cvtsd2ss`-style conversion instructions anywhere in the
+compiled loop — no literal was missed.
+
+**Real full-model result**: `benchmark/run_benchmarks.jl` (real NCEP data,
+`-t 3`) — **0.68-0.72s/year, mean 0.70s**, vs. the ~1.1-1.2s/year `Float64`
+baseline measured earlier this session. **~1.6× faster**, matching the
+weighted estimate from the kernel-level numbers above and landing in the
+same league as §2.11's threading win — the single biggest lever found this
+session.
 
 ### 2.4 Thread the spatial operators — tried, measured, reverted
 `Threads.@threads :static` on `diffusion!`/`advection!`'s outer row loop,
@@ -354,6 +453,70 @@ point is skipping it 729/730 times per year is free). Verified via the full
 test suite's `"greb_model! reaches every :experiment symbol..."` test,
 which exercises both experiments directly.
 
+### 2.15 Four small-scale fixes (2026-08-13) — ✅ done
+All verified against the full 438-test suite and a full-model benchmark run
+(`benchmark/run_benchmarks.jl`, real NCEP data, `-t 3`) before/after —
+output unchanged, no regression. Each fix was also benchmarked **in
+isolation** against its pre-fix version (old code pulled from git `HEAD`,
+run side-by-side with the fixed version in the same process, real NCEP
+data where applicable):
+
+| Fix | Old | New | Speedup | Est. saving/year |
+|---|---|---|---|---|
+| `output!` copy elimination (per field) | 23.6 µs | 3.2 µs | **7.4×** | ~3.2 ms (×13 fields, ×12 months) |
+| `LWradiation!` fused `LW_up` write | 36.6 µs | 34.3 µs | 1.07× | ~1.7 ms (×730 calls) |
+| `hydro!` loop fusion | 16.8 µs | 11.5 µs | **1.46×** | ~3.9 ms (×730 calls) |
+| polar sub-step constants (`diffusion!`) | 36.9 ns | 2.2 ns | **16.8×** | ~22 ms (×700,800 calls) |
+| polar sub-step constants (`advection!`) | 33.3 ns | 2.4 ns | **17.7×** | ~22 ms (×700,800 calls) |
+
+Combined estimated saving: **~53 ms/simulated year**, out of a ~1.1-1.2
+s/year baseline (~4-5%) — real, but still inside the full-model benchmark's
+own run-to-run noise band (0.94-1.22s/year measured on this machine), so it
+doesn't show up as a clean before/after delta at the whole-run level; the
+per-fix isolation above is what actually demonstrates each one's effect.
+Detail per fix:
+- **`output!`'s redundant double allocation** (`output.jl`): each of the 13
+  monthly-record fields was built as `copy(acc.Tmm ./ ndm)` — `./` already
+  returns a fresh, non-aliased array, so `copy(...)` allocated a second
+  array and immediately discarded the first. Removed the redundant `copy`.
+  Biggest *relative* win of the four (7.4×) but only runs at month
+  boundaries (12×/year), so modest in absolute terms.
+- **Extra full-grid pass in `LWradiation!`** (`radiation.jl`): `LW_up .=
+  LW_down` copied the whole grid in a second pass right after the `@turbo`
+  loop that computed `LW_down`. Merged the write into the same loop
+  (`LW_up[i,j] = LW_down_val` alongside `LW_down[i,j] = LW_down_val`). Only
+  a 1.07× win in isolation — copying a cache-resident 96×48 array is
+  already fast (basically a 36 KB memcpy), so removing the second pass
+  saves little; the value here is code cleanliness, not raw speed.
+- **`hydro!`'s 6 separate `@turbo` loops over the same grid** (default
+  config runs 5 of them; `log_rain==1` adds the 6th): saturation humidity,
+  relative humidity, evaporation (one of 4 `log_eva` branches), precipitation,
+  the optional rain-limit clamp, and water-vapor tendencies were each a
+  separate full-grid pass, despite being purely elementwise (no
+  cross-grid-point coupling) — nothing here needs neighbor values the way
+  `diffusion!`/`advection!` do. Fused each `log_eva` branch into a single
+  `@turbo` loop that walks the whole per-point pipeline (including the
+  rain-limit clamp, now an inline `ifelse` gated on `cfg.log_rain==1` rather
+  than a separate conditional pass) in one grid traversal. Output matches
+  the pre-fusion version to floating-point roundoff (~1e-13, from
+  reassociated `exp`/`sqrt` calls). `hydro!` runs once per main timestep
+  (not per circulation sub-step), so this is ~730×/year.
+- **Polar sub-step constants recomputed every call** (`circulation.jl`'s
+  `diffusion!`/`advection!`): `dd`/`dtdff2`/`time2`/`ccx2` in each polar-row
+  branch depend only on `k` (via `dxlat_grid[k]`) and fixed module
+  constants — never on the per-call `T1` data — yet were recomputed from
+  scratch on every call. There are **20 of 48 rows** flagged `IS_POLAR`
+  (not a handful, as the raw formula count might suggest) — 20 rows × 2
+  fields (Ta, q) × 24 sub-steps × 730 steps/year = **700,800 calls/year**
+  for diffusion alone, and the same count again for advection (different
+  formula, same waste). Precomputed as `POLAR_DIFF_TIME2`/`POLAR_DIFF_CCX2`/
+  `POLAR_ADV_TIME2`/`POLAR_ADV_CCX2` (`constants.jl`, same pattern as the
+  existing `ccx_diff`/`ccx_adv`/`dxlat_grid` lookup tables), indexed by `k`.
+  Individually this was only a handful of scalar ops (~35 ns), but at
+  700,800× the call count this turned out to be the **largest absolute
+  saving of the four** (~44 ms/year combined) — the "small-scale fix" label
+  undersold this one; the call-count multiplier is what makes it matter.
+
 ### 2.14 Other sweep findings — investigated, not implemented
 A wider pass (2026-08-12) also looked beyond `@turbo` candidates, at
 architecture/I-O patterns:
@@ -377,6 +540,58 @@ architecture/I-O patterns:
   wall-clock time for the current usage pattern, and would hurt readability
   for no real gain absent a hypothetical high-frequency-construction use
   case that doesn't currently exist in this codebase.
+- **Rust FFI for hot kernels** (2026-08-13): benchmarked a Rust `cdylib`
+  (`opt-level=3`, `lto`, both default and `target-cpu=native`) against the
+  existing `@turbo` mid-latitude zonal-diffusion kernel
+  (`circulation.jl:72-94`), calling it via `ccall` with real NCEP climatology
+  data and byte-identical output. Result: Rust was **slower**, not
+  faster — 374-413 ns/call vs. 233 ns/call for the current `@turbo` version.
+  The `ccall` round-trip itself is negligible (~2 ns, measured with a no-op
+  control), so FFI overhead isn't the cause: this kernel is a gather-heavy
+  stencil (5 pairs of non-contiguous periodic-neighbour lookups per
+  element), and `LoopVectorization.@turbo` already emits SIMD-gather code
+  tuned for exactly that pattern, which plain `rustc -O3` autovectorization
+  doesn't match without hand-written SIMD intrinsics. At this grid size
+  (96×48) and kernel granularity, adding a second-language build (Rust
+  toolchain in CI, `ccall` bindings, binary-artifact distribution for a
+  registered package) would add real complexity for a net slowdown — not
+  pursued further.
+- **Loop iteration order vs. column-major memory layout** (2026-08-13):
+  `physics/ocean.jl:20,40,81` and `physics/radiation.jl:20,39` write
+  `@turbo for i in 1:xdim, j in 1:ydim` (`j`, not the memory-contiguous
+  `i`, is the fastest-varying/innermost index) while other kernels nest the
+  other way (`i` innermost). Benchmarked both orderings standalone on two
+  kernels: `seaice!`'s first loop body (cheap, few branches) and
+  `deep_ocean!`'s loop body (heavier — divisions, more branches). For
+  **both**, with `@turbo` present, source order made no reliable
+  difference — medians swapped which order "won" between repeated runs
+  (e.g. `deep_ocean!`-style: 9193 vs. 8100 ns one run, 4243 vs. 4329 ns the
+  next), and `@code_native` showed packed SIMD loads (`vmovup*`), **no
+  gather instructions**, for either order in both kernels.
+  `LoopVectorization.@turbo` picks the true unit-stride axis for
+  vectorization itself, independent of source loop nesting order — so this
+  mismatch costs nothing today in the actual `@turbo`'d code.
+  - However, the same `deep_ocean!`-style body **without** `@turbo` (plain
+    `@inbounds` loop) is genuinely order-sensitive: correct
+    (memory-contiguous) order measured 8400-9800 ns, mismatched order
+    measured 18300-21200 ns — a reproducible **~2.2× slowdown** — and
+    `@code_native` confirmed why: the mismatched plain loop compiles to
+    `vgather`/scalar loads instead of packed `vmovup*`. So the general
+    principle ("wrong order costs nothing") only holds *because* `@turbo`
+    is present; it would be a real bug in any loop that lacks it.
+  - Checked every double-nested spatial loop in `src/` for this: every
+    site using the "wrong" `i`-outer/`j`-inner order already has `@turbo`
+    (the two files above); every plain/`@inbounds`-only double loop
+    (`model.jl:119` in one-time `init_model!` setup, `tendencies.jl:206-233`
+    in rare `it==1` static-mask branches for `:regional_co2_ocean`/
+    `:regional_co2_land_ice`) already uses the correct `j`-outer/`i`-inner
+    order. No live instance of "no `@turbo` + wrong order" exists in the
+    codebase today. Not changed; the `i`/`j` nesting inconsistency in
+    `ocean.jl`/`radiation.jl` remains a readability nit only — but the
+    ~2.2× plain-loop finding is worth keeping in mind for any *future*
+    spatial loop that can't use `@turbo` (e.g. calls a function
+    `LoopVectorization` doesn't support): get the nesting order right for
+    those, since there's no compiler safety net without `@turbo`.
 
 ### 2.11 Parallelize `tendencies!`'s independent stages — ✅ done
 All six stages (`SW`/`LW`/`hydro`/`deep_ocean`/`circulation!(Ta)`/
@@ -760,3 +975,70 @@ Fortran's real gate is `log_exp` — is the already-documented §7.3 finding
 about `_dmc`/`_drsp` families lacking a combined preset; not re-litigated
 here.) Test: `greb_model! flux-correction spin-up: loaded files aren't
 overwritten by qflux_correction! (§8.5)`.
+
+---
+
+## 9. Julia General Registry publication readiness
+
+### 9.1 Data distribution (Artifacts.jl) — deferred by decision
+
+The model needs ~1.16 GB of climatology/scenario data (`Data/` 581 MB +
+`greb_dataset_jld2/` 580 MB) to actually run, but neither directory is
+git-tracked — both are gitignored, so the git tree at any tag (what `Pkg`'s
+package tarball is built from) already excludes them. That's correct: a
+General-registry package must stay small, and nothing in the registry
+process requires or expects large data to live inside the package tree
+itself.
+
+What's missing is the other half — an automated way for a `Pkg.add("GREB")`
+user to actually *get* the data. Today it's "ask the maintainer, or
+regenerate from raw `.bin` files via `scripts/convert_greb_to_jld2.jl`"
+(README's Input Data section). There is no `Artifacts.toml` and no
+`artifact"..."` usage anywhere in the repo — every loader in `src/io.jl`
+(`load_greb_jld2!`, `load_cc_anomaly_jld2!`, `load_solar_forcing_jld2`,
+`load_co2_scenario_jld2`, etc.) takes a plain required `jld2_dir::String`
+positional argument, joined with hardcoded subdirectory names
+(`climatology/`, `static/`, `solar/`, `scenario/`).
+
+**Deferred plan, not implemented in this pass:**
+1. Build the `greb_dataset_jld2/` tree, tar it, and attach it as an asset on
+   a GitHub Release (the repo already publishes releases — see `v0.1.0`,
+   `v1.0.0`).
+2. Generate `Artifacts.toml` at the repo root via
+   `Pkg.Artifacts.create_artifact`/`bind_artifact!`, pointing at that release
+   asset URL with its SHA256 + git-tree-sha1.
+3. Change `src/io.jl`'s loaders to resolve `artifact"greb_dataset"` instead
+   of requiring a manually-supplied `jld2_dir`, falling back to an explicit
+   path override for anyone who wants to point at a local/custom dataset
+   (e.g. during development, or a different reanalysis product).
+4. This also closes a real coverage gap noted during the registry audit:
+   `.github/workflows/ci.yml` never fetches `greb_dataset_jld2/`, so the
+   "heavy" test shard's data-gated tests — including the golden-regression
+   check — currently always hit the `@test_skip "greb_dataset_jld2/ not
+   present"` branch in `test/runtests.jl` and silently never run in CI.
+   Once artifact-based loading exists, CI can resolve the artifact like any
+   other user and actually exercise that coverage.
+
+### 9.2 Repo rename (`GREB-julia` → `GREB.jl`) — deferred by decision
+
+Registry convention expects the GitHub repo backing a package named `GREB`
+to be called `GREB.jl`; this repo is `GREB-julia`. Not an AutoMerge
+blocker, but commonly expected by reviewers. Rename is deferred for now —
+revisit before actually submitting the registration PR
+(`docs/make.jl`'s `deploydocs(repo = "github.com/EnvDroneSense/GREB-julia.git", ...)`
+and any other hardcoded repo URLs would need updating alongside the
+GitHub-side rename).
+
+### 9.3 Registry audit summary
+
+A full AutoMerge-requirements pass (2026-08-12) otherwise found the package
+in good shape: `Project.toml` has compat bounds on every dependency
+including `julia` itself; `LICENSE` (MIT) exists; `test/runtests.jl` runs
+cleanly with zero external data required (data-gated tests skip gracefully,
+per §9.1 above); and a live check against `JuliaRegistries/General`
+confirmed the name `GREB` is not yet taken. Fixed as part of this pass:
+version reset to `1.0.0` for a clean first registration (the package had
+briefly been bumped to `1.1.0`), a new `CITATION.cff`, a
+`Pkg.add("GREB")` forward-reference in the README, and a git-history
+rewrite (`git filter-repo`) to strip ~26 MB of now-deleted `Data/input/*.bin`
+files that were still permanently baked into old commits.
