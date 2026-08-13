@@ -643,6 +643,49 @@ below measured, the remaining gap being `output!`/`diagnostics!`/
 bookkeeping outside `tendencies!` that this change doesn't touch (Amdahl's
 law, given `tendencies!`'s ~70–75% share, §2.10).
 
+**Re-review (2026-08-13, post-`Float32`) — `-t 2` is now the reliable
+choice; `-t 3`'s advantage is gone.** The `-t 3` recommendation above was
+measured when circulation was ~65-75% of per-timestep cost and "the rest"
+(SW/LW radiation, `hydro!`, `deep_ocean!`) was a real ~25-35% — a genuine
+third lane worth its own thread. §2.3's `Float32` conversion changed that
+balance: the new `stages` mode in `benchmark/run_benchmarks.jl` shows
+circulation(Ta)+circulation(q) at **~98%** of the pipeline and "the rest"
+at **~2%** (`Float32` gave the small elementwise kernels a bigger relative
+speedup — 2.6-3× — than circulation's ~1.4×, so its tiny absolute cost
+shrank further while circulation's share of the *total* actually grew).
+
+With "the rest" now nearly free, `-t 2` already captures almost all the
+real parallelism: the main task finishes its ~30µs of synchronous work,
+blocks on `wait()`, and Julia's work-stealing scheduler picks up whichever
+of the two spawned circulation tasks hasn't started yet — so the two big
+tasks still run genuinely concurrently on 2 threads, just staggered by that
+~30µs instead of starting simultaneously. The third thread that `-t 3` adds
+now sits idle for ~98% of each timestep while still costing task-spawn/
+sync overhead 730×/year, and having more active threads exposes more
+scheduling variance to background system load (`benchmark/run_benchmarks.jl`
+`threads` mode spawns real OS processes per thread count, so it does see
+this).
+
+Measured across 5 independent `threads`-mode sweeps (real NCEP dataset,
+`-t 3` reps=3-4 each; machine had the usual OneDrive-sync/SearchIndexer
+background load — see the benchmark skill's noise-source list, not
+suppressed here since the point is `-t 3`'s *sensitivity* to it):
+
+| Threads | Speedup vs. `-t 1` across 5 sweeps | Consistency |
+|---|---|---|
+| `-t 2` | 1.24×, 1.48×, 1.50×, 1.58×, 1.62× (mean ~1.48×) | Low variance — always a clear win |
+| `-t 3` | 1.02×, 1.14×, 1.38×, 1.52×, 1.65× (mean ~1.34×) | High variance — sometimes ties `-t 2`, sometimes barely beats serial |
+| `-t 4` | 0.79×, 1.12×, 1.14×, 1.15×, 1.53× (mean ~1.15×) | High variance, lowest mean |
+
+`-t 3` is *not* reliably worse than `-t 2` in every single run (it won
+outright in 2 of the 5 sweeps) — the honest finding is that `-t 2` is now
+the **consistent, low-risk default**, while `-t 3`/`-t 4` no longer have a
+dependable edge to justify recommending them over `-t 2` by default. This
+reverses the earlier "`-t 3`, not `-t 2`" guidance for this codebase's
+current (`Float32`) state — a direct, load-bearing consequence of §2.3,
+not a new independent optimization. Updated: `benchmark/run_benchmarks.jl`'s
+`threads` mode/skill guidance, `README.md`'s threading blurb.
+
 Other identified, unimplemented opportunities (not benchmarked further):
 ensemble/parameter-sweep parallelism via `Threads`/`Distributed`/GPU arrays
 (likely the bigger practical payoff given how the model is actually used —
@@ -772,10 +815,11 @@ Nothing blocking. Remaining open items:
 
 Landed across the last two passes: §2.12's original 4 `@turbo` fixes plus
 its 4 follow-up fixes, §2.13's `forcing()` mask-recomputation fix, §3.0's
-test-suite sharding, and §2.11's 3-way `tendencies!` thread split (needs
-`-t 3`, not `-t 2`, to realize its full ceiling — see §2.11's correction
-note) — see each section above and `CHANGELOG.md` for the real (not just
-benchmarked) numbers.
+test-suite sharding, and §2.11's 3-way `tendencies!` thread split (originally
+needed `-t 3`, not `-t 2`, to realize its full ceiling — since reversed by
+the `Float32` conversion, §2.3; `-t 2` is now the recommended default — see
+§2.11's post-`Float32` re-review) — see each section above and
+`CHANGELOG.md` for the real (not just benchmarked) numbers.
 
 > ⚠️ Every performance change must be validated against a reference run —
 > "faster" only counts if output is unchanged within tolerance. Every

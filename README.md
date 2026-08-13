@@ -60,7 +60,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 - 🔬 Support for multiple climate datasets (NCEP, ERA-Interim)
 - 🌡️ IPCC climate scenarios - all four RCPs and five SSPs are implemented (`:rcp26`/`:rcp45`/`:rcp60`/`:rcp85`, `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`), plus a historical CO2 (1850–2017) hindcast (`:historical_co2`) and a user-supplied CO2 trajectory (`:custom_co2`)
 - 🧩 "Deconstruct" experiments (`:decon_mean_climate`, `:decon_2xco2`) - toggle individual mean-climate/2×CO₂-response feedback processes on or off via `log_*_dmc`/`log_*_drsp` keywords passed to `create_experiment_config`
-- ⚡ Multi-threaded physics - the temperature and humidity `circulation!` calls run concurrently via `Threads.@spawn` when Julia is started with 3+ threads (e.g. `julia --project=. -t 3`)
+- ⚡ Multi-threaded physics - the temperature and humidity `circulation!` calls run concurrently via `Threads.@spawn` when Julia is started with 2+ threads (e.g. `julia --project=. -t 2`, the recommended count - see `.claude/skills/benchmark/SKILL.md` for why more threads no longer reliably helps further)
 - 🎯 `Float32` throughout - climatology, workspace buffers, and model state all compute in single precision (matching the `Float32` JLD2 input data natively, no upconversion), for a further ~1.6× wall-clock speedup on top of threading, with output validated against the previous `Float64` path to well under 0.01 K
 - ☀️ Orbital forcing and paleoclimate experiments
 
