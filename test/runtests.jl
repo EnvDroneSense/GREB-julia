@@ -4,9 +4,9 @@ using Test
 # Smoke tests that do NOT require the (large, external) JLD2 input data.
 # They check that the package loads, its types build, and the grid/constants
 # are intact after the notebook -> package extraction. Full integration runs
-# (which need `greb_dataset_jld2/`) are demonstrated in examples/run_greb.jl.
+# (which need `greb_input_data/`) are demonstrated in examples/run_greb.jl.
 
-const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
+const DATA_DIR = joinpath(@__DIR__, "..", "greb_input_data")
 
 # The 24 testsets below are split into two groups so CI can shard them across
 # 2 parallel jobs `run_light_tests()` (17 cheap testsets) and `run_heavy_tests()` (7
@@ -516,7 +516,7 @@ function run_light_tests()
         # With log_hydro_dmc off, q must never move from its initial
         # climatological value
         if !isdir(DATA_DIR)
-            @test_skip "greb_dataset_jld2/ not present"
+            @test_skip "greb_input_data/ not present"
         else
             fields = load_greb_jld2!(DATA_DIR; dataset = :ncep)
             cfg = create_experiment_config(:full_model)
@@ -1008,7 +1008,7 @@ function run_heavy_tests()
         # float-reassociation noise (~1e-12) means real behavior changed.
         # Set RUN_GOLDEN=0 to skip this locally; CI always runs it.
         if !isdir(DATA_DIR)
-            @test_skip "greb_dataset_jld2/ not present"
+            @test_skip "greb_input_data/ not present"
         elseif get(ENV, "RUN_GOLDEN", "1") == "0"
             @test_skip "RUN_GOLDEN=0"
         else

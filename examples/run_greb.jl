@@ -10,8 +10,8 @@
 #   5. plot global-mean Ts          (the notebook's plotting cell)
 #
 # Two ways to run:
-#   * as a script:  julia --project=. examples/run_greb.jl [path/to/greb_dataset_jld2]
-#   * from a REPL:   include("examples/run_greb.jl"); run_greb("path/to/greb_dataset_jld2")
+#   * as a script:  julia --project=. examples/run_greb.jl [path/to/greb_input_data]
+#   * from a REPL:   include("examples/run_greb.jl"); run_greb("path/to/greb_input_data")
 #
 # NOTE: the JLD2 input data is large and not committed (see DATA_README.md);
 # supply its directory as the argument or via the GREB_DATA env var. This script
@@ -89,7 +89,7 @@ end
 
 # Default data directory: first CLI arg, else $GREB_DATA, else repo-root dataset.
 const DEFAULT_JLD2_DIR = get(ENV, "GREB_DATA",
-    !isempty(ARGS) ? ARGS[1] : joinpath(@__DIR__, "..", "greb_dataset_jld2"))
+    !isempty(ARGS) ? ARGS[1] : joinpath(@__DIR__, "..", "greb_input_data"))
 
 # Run automatically when executed as a script (`julia run_greb.jl`), but NOT when
 # `include`-d into an interactive session — so a REPL is never terminated.

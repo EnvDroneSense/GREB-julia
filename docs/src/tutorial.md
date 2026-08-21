@@ -9,7 +9,7 @@ result.
 ```julia
 using GREBClimate
 
-jld2_dir = "greb_dataset_jld2"   # see DATA_README.md for the expected layout
+jld2_dir = "greb_input_data"   # see DATA_README.md for the expected layout
 fields = load_greb_jld2!(jld2_dir; dataset = :ncep)   # or :era
 ```
 

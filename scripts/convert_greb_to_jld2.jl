@@ -22,7 +22,7 @@
 # Usage:
 #   julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
 #   # defaults: input_dir  = Data/input        (see DATA_README.md)
-#   #           output_dir = greb_dataset_jld2  (see README.md)
+#   #           output_dir = greb_input_data  (see README.md)
 
 using JLD2
 
@@ -402,6 +402,6 @@ end
 
 if abspath(PROGRAM_FILE) == @__FILE__
     input_path = length(ARGS) >= 1 ? ARGS[1] : joinpath(@__DIR__, "..", "Data", "input")
-    output_dir = length(ARGS) >= 2 ? ARGS[2] : joinpath(@__DIR__, "..", "greb_dataset_jld2")
+    output_dir = length(ARGS) >= 2 ? ARGS[2] : joinpath(@__DIR__, "..", "greb_input_data")
     main(input_path, output_dir)
 end

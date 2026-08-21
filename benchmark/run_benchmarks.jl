@@ -17,13 +17,13 @@
 # Usage:
 #   julia --project=. -t 2 benchmark/run_benchmarks.jl [mode] [jld2_dir] [reps]
 #   (mode defaults to "year"; jld2_dir defaults to GREB_DATA or
-#   ../greb_dataset_jld2; reps only applies to "year", default 3)
+#   ../greb_input_data; reps only applies to "year", default 3)
 #
 #   -t 2, not -t 3, is the recommended thread count for `year` - see the
 #   `sweep_threads` docstring below for why.
 #
 #   julia --project=. -t 2 benchmark/run_benchmarks.jl                     # year, default dir
-#   julia --project=. -t 2 benchmark/run_benchmarks.jl greb_dataset_jld2   # year (legacy call form)
+#   julia --project=. -t 2 benchmark/run_benchmarks.jl greb_input_data   # year (legacy call form)
 #   julia --project=. -t 2 benchmark/run_benchmarks.jl stages
 #   julia --project=. -t 1 benchmark/run_benchmarks.jl threads
 #   julia --project=. -t 1 benchmark/run_benchmarks.jl alloc
@@ -236,7 +236,7 @@ function check_allocations(jld2_dir::AbstractString)
     return bytes
 end
 
-const DEFAULT_JLD2_DIR = get(ENV, "GREB_DATA", joinpath(@__DIR__, "..", "greb_dataset_jld2"))
+const DEFAULT_DATA_DIR = get(ENV, "GREB_DATA", joinpath(@__DIR__, "..", "greb_input_data"))
 
 const _MODES = ("year", "stages", "threads", "alloc")
 
@@ -246,7 +246,7 @@ const _MODES = ("year", "stages", "threads", "alloc")
 # - ARGS[1] is only treated as a mode if it's one of `_MODES`.
 if abspath(PROGRAM_FILE) == @__FILE__
     mode, rest = !isempty(ARGS) && ARGS[1] in _MODES ? (ARGS[1], ARGS[2:end]) : ("year", ARGS)
-    jld2_dir = !isempty(rest) ? rest[1] : DEFAULT_JLD2_DIR
+    jld2_dir = !isempty(rest) ? rest[1] : DEFAULT_DATA_DIR
 
     if mode == "year"
         reps = length(rest) >= 2 ? parse(Int, rest[2]) : 3

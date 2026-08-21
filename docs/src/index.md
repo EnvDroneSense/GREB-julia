@@ -39,7 +39,7 @@ The model reads **JLD2**-formatted climatology, flux-correction, and solar
 forcing files. These are too large to ship with the package; see
 [`DATA_README.md`](https://github.com/EnvDroneSense/GREBClimate.jl/blob/main/DATA_README.md)
 in the repository for the expected layout and the conversion script that
-builds a `greb_dataset_jld2/` directory from the original GREB `.bin` files.
+builds a `greb_input_data/` directory from the original GREB `.bin` files.
 
 See the [Tutorial](@ref) for a runnable end-to-end example, or the
 [API Reference](@ref) for every exported function and type.

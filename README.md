@@ -20,11 +20,11 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 > julia --project=.                 # activate the package env
 > using GREBClimate
 > cfg = create_experiment_config(:full_model)
-> load_greb_jld2!("greb_dataset_jld2"; dataset=:ncep)
+> load_greb_jld2!("greb_input_data"; dataset=:ncep)
 > result = greb_model!(RunSpec(), cfg)   # flux=0, ctrl=1, scnr=1 years
 > ```
 > Run the tests with `julia --project=. -e 'using Pkg; Pkg.test()'`, or the full
-> driver with `julia --project=. examples/run_greb.jl <path/to/greb_dataset_jld2>`.
+> driver with `julia --project=. examples/run_greb.jl <path/to/greb_input_data>`.
 
 ## 📖 Table of Contents
 
@@ -120,7 +120,7 @@ In the original model these were all separate `.bin` files. `scripts/convert_gre
 
 ```bash
 julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
-# defaults: input_dir=Data/input, output_dir=greb_dataset_jld2
+# defaults: input_dir=Data/input, output_dir=greb_input_data
 ```
 
 These data files are too large to upload to GitHub but can be made available on request, or regenerated from the raw `.bin` files with the converter script.
@@ -128,7 +128,7 @@ These data files are too large to upload to GitHub but can be made available on 
 ### Directory Structure
 
 ```
-greb_dataset_jld2/
+greb_input_data/
 ├── static/
 │   ├── global.topography.jld2      # 2D (96×48)
 │   └── greb.glaciers.jld2          # 2D (96×48)
@@ -171,7 +171,7 @@ load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
 ### 1. Load Data
 
 ```julia
-jld2_dir = joinpath(@__DIR__, "greb_dataset_jld2")
+jld2_dir = joinpath(@__DIR__, "greb_input_data")
 fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 ```
 

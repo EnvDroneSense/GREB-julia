@@ -156,7 +156,7 @@ Before running the model, load the climate input data from the `input/` director
 
 # ╔═╡ 4995d3d8-1f95-41d8-be6c-50663edbce10
 begin
-	jld2_dir = joinpath(@__DIR__, "..", "greb_dataset_jld2")  # dataset lives at repo root, not notebooks/
+	jld2_dir = joinpath(@__DIR__, "..", "greb_input_data")  # dataset lives at repo root, not notebooks/
 	fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 end
 

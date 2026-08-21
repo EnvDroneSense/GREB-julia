@@ -49,7 +49,7 @@ low-variance choice.
    ```
 
    Pass a JLD2 data directory as the next positional argument if it isn't
-   at the default `../greb_dataset_jld2` location, or set `GREB_DATA`. The
+   at the default `../greb_input_data` location, or set `GREB_DATA`. The
    legacy single-argument call form (`... run_benchmarks.jl <dir>`, no mode)
    still works and defaults to `year`.
 
