@@ -19,6 +19,13 @@ using SHA
 
 const REPO = normpath(joinpath(@__DIR__, ".."))
 
+"""
+Fixed timestamp stamped on every archive entry, so the archive depends only on
+the dataset's *contents*. Any constant works; it must simply never change, or
+previously recorded checksums stop reproducing.
+"""
+const ARCHIVE_MTIME = "2020-01-01 00:00:00 UTC"
+
 # ── validate the tree before packaging ───────────────────────────────────────
 """
 Check `dir` against the converter's allowlist: every field the model reads must
@@ -69,15 +76,23 @@ function validate_dataset(dir::AbstractString)
               dataset contains $(length(extra)) file(s) the model never reads:
                 $(join(sort(collect(extra)), "\n  "))
               Regenerate without --all, or add them to MODEL_FIELD_NAMES if they
-              are now genuinely used. See .claude/notes/data-distribution.md.
+              are now genuinely used.
               """)
     end
     return nfiles, nbytes
 end
 
 function build_archive(dir::AbstractString, out::AbstractString)
-    # Reproducible tar: sorted names, no owner info, gzip without a timestamp.
-    cmd = pipeline(`tar --sort=name --owner=0 --group=0 --numeric-owner -cf - -C $dir .`,
+    # Reproducible tar. All four flags matter:
+    #   --sort=name        stable entry order
+    #   --owner/--group    no uid/gid from the building machine
+    #   --mtime            pinned; tar stores each file's mtime, so without this
+    #                      a regenerated dataset produces a different archive
+    #                      even when every file is byte-identical (this bit us
+    #                      on 2026-08-21: same content, 17-byte-different .gz)
+    #   gzip -n            no timestamp or filename in the gzip header
+    cmd = pipeline(`tar --sort=name --owner=0 --group=0 --numeric-owner
+                        --mtime=$ARCHIVE_MTIME -cf - -C $dir .`,
                    `gzip -n -6`)
     open(out, "w") do io
         run(pipeline(cmd; stdout = io))
@@ -109,6 +124,8 @@ function main(dir::AbstractString, out::AbstractString)
     println()
     println("Next steps:")
     println("  1. Update DATA_SHA256 in src/data.jl to the hash above.")
+    println("     It only changes if the dataset contents changed: entry")
+    println("     timestamps are pinned, so a plain regeneration reproduces it.")
     println("  2. Attach the archive to the '", data_release_tag(), "' GitHub release")
     println("     as '", basename(out), "' (the name must match DATA_ARCHIVE_NAME).")
     println("  3. Verify end-to-end on a clean machine, or by clearing the")

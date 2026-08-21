@@ -85,10 +85,7 @@ Breaks one timestep's `tendencies!` pipeline into its component stages
 (circulation for `Ta` and `q`, SW/LW radiation, `hydro!`, `deep_ocean!`) and
 times each individually - `reps` back-to-back calls after a warm-up,
 averaged - reporting per-call time and each stage's share of the pipeline
-total. This is the same per-stage breakdown methodology
-`.claude/notes/performance.md` §2.10 used to establish circulation's ~65-75%
-share, now scripted instead of ad hoc, so it can be re-run after any change
-that might shift the balance (e.g. a kernel-specific optimization).
+total.
 
 Threads are not spawned here (single-workspace calls only) even if
 `Threads.nthreads() > 1` - this measures each stage's serial cost, which is
@@ -156,7 +153,7 @@ swept in-process - and reports relative speedup vs. `-t 1`.
 
 `tendencies!` spawns a 3-lane split (`circulation!(Ta)` ‖ `circulation!(q)`
 ‖ everything else), but since the `Float32` conversion
-(`.claude/notes/performance.md` §2.3) circulation is ~98% of per-timestep cost and
+ circulation is ~98% of per-timestep cost and
 "everything else" is ~2% - too little work to justify a dedicated third
 thread. `-t 2` already gets nearly all the real parallelism (the main task
 finishes its ~30µs of synchronous work and blocks on `wait()`, at which
@@ -205,9 +202,7 @@ end
     check_allocations(jld2_dir)
 
 Reports bytes allocated by one `tendencies!` call (after a warm-up call to
-exclude JIT/compilation allocations) - a cheap regression guard for the
-zero-allocation-per-timestep invariant established in
-`.claude/notes/performance.md` §2.2/§2.5/§2.7. Uses the default `ws_a=ws_q=ws`
+exclude JIT/compilation allocations). Uses the default `ws_a=ws_q=ws`
 (synchronous, non-`Threads.@spawn`) path, since spawning tasks allocates
 regardless of the physics code's own allocation behavior.
 """

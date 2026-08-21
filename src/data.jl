@@ -25,13 +25,17 @@ const DATA_URL = "https://github.com/EnvDroneSense/GREBClimate.jl/releases/downl
                  "$DATA_RELEASE_TAG/$DATA_ARCHIVE_NAME"
 
 """
-SHA256 of `DATA_ARCHIVE_NAME`, 370563615 bytes.
+SHA256 of `DATA_ARCHIVE_NAME`, 370563584 bytes.
 
 Reproducible: `tools/package_dataset.jl` builds the archive with sorted entries,
-zeroed owner/group and `gzip -n`, so rebuilding from an identical tree yields
-this exact hash. 
+zeroed owner/group, **pinned entry timestamps** and `gzip -n`, so the archive
+depends only on the dataset's contents. Regenerating the `.jld2` tree from the
+raw `.bin` files and repackaging reproduces this exact hash.
+
+(The timestamp pin matters: without it tar stored each file's mtime, so a
+regenerated-but-byte-identical dataset produced a different archive.)
 """
-const DATA_SHA256 = "370732f4166af8f9a5dfb2fd160c035b0881c79d1acfc53a0e59bc9bdb040315"
+const DATA_SHA256 = "a9799ecb2e50d6f01517c69e2a7c6a8f646887123271d83eb3538990597f65c5"
 
 const _DATA_MESSAGE = """
 The GREB input dataset (~353 MB download, ~439 MB unpacked).

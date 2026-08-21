@@ -3,10 +3,9 @@
 Notable changes to GREBClimate.jl, in roughly chronological order. Loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) conventions;
 since the package hasn't had its first registered release yet, entries are
-grouped by development phase rather than version number. For the detailed,
-pass-by-pass discovery narrative behind any entry below - which bug, how it
-was found, how it was verified against the Fortran reference - see
-[`.claude/notes/audit-history.md`](.claude/notes/audit-history.md).
+grouped by development phase rather than version number. Each entry below records what
+changed; the pass-by-pass discovery narrative behind them is kept in the
+maintainers' working notes rather than in this file.
 
 ## [Unreleased] - toward v1.0.0 / first registration
 
@@ -90,7 +89,7 @@ reference (`greb.model.mscm.f90`); the ones with the widest-reaching impact:
   binding - found while wiring up the Documenter.jl site.
 
 The remaining 13 fixes, plus one investigated-and-reverted finding, are
-detailed in `.claude/notes/audit-history.md`.
+recorded in the maintainers' working notes.
 
 ### Performance
 - ~2.31× faster per simulated year (2.7s → 1.17s) from 3-way threading of
@@ -104,16 +103,11 @@ detailed in `.claude/notes/audit-history.md`.
 - The dataset shrank from 580 MB / 49 files to **439 MB / 39 files**: 11 files
   that no code reads were removed, mostly CMIP5 `.new` variants of fields the
   model reads in their non-`.new` form. The official MSCM Fortran GREB opens
-  the non-`.new` names, so this changes no results; see
-  `.claude/notes/data-distribution.md`.
-- User-facing data documentation now describes obtaining the prepared `.jld2`
-  bundle. `DATA_README.md` and the `.bin` converter are labelled as maintainer
-  tooling, which is what they are - the raw inputs are collated from several
-  upstream sources and are not redistributed. Distribution via DataDeps.jl is
-  planned; see `.claude/notes/data-distribution.md`.
-- Development notes moved from `claude/` to `.claude/notes/`, split by topic
-  with an explicit status (Done / Investigated / Open / Planned) per file and
-  an `INDEX.md`. This also removes the `claude/` vs `.claude/` name collision.
+  the non-`.new` names, so this changes no results.
+- User-facing data documentation now describes the automatic download and the
+  paths that bypass it. `DATA_README.md` and the `.bin` converter are labelled
+  as maintainer tooling, which is what they are - the raw inputs are collated
+  from several upstream sources and are not redistributed.
 - `src/GREB.jl`, originally a single 2,245-line file, split into topical
   files (`constants`, `config`, `state`, `io`, `physics/`, `circulation`,
   `tendencies`, `output`, `postprocess`, `model`).

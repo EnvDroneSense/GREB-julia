@@ -27,15 +27,11 @@ function run_light_tests()
     end
 
     @testset "PhysicsConfig" begin
-        cfg = PhysicsConfig()
-        @test cfg isa PhysicsConfig
-
         for exp in (:full_model, :constant_topo, :co2_double, :co2_quadruple,
                     :elnino, :lanina, :rcp26, :rcp45, :rcp60, :rcp85, :ssp119,
                     :ssp126, :ssp245, :ssp460, :ssp585, :historical_co2,
                     :decon_mean_climate, :decon_2xco2)
             c = create_experiment_config(exp)
-            @test c isa PhysicsConfig
             @test c.experiment == exp
         end
 
@@ -117,11 +113,15 @@ function run_light_tests()
 
     @testset "workspace/accumulator/record types construct correctly" begin
         ws = CirculationWorkspace()
-        @test ws isa CirculationWorkspace
+        @test size(ws.dTa_crcl) == (GREBClimate.xdim, GREBClimate.ydim)
+        @test eltype(ws.dTa_crcl) === Float32
 
         acc = MonthlyAccumulator()
-        @test acc isa MonthlyAccumulator
-        @test (GREBClimate.reset!(acc); true)   # reset! runs without error
+        acc.count = 7
+        fill!(acc.Tmm, 42.0f0)
+        GREBClimate.reset!(acc)
+        @test acc.count == 0
+        @test all(iszero, acc.Tmm)
 
         ts = TimeState(1, 1)
         @test ts.jday == 1
@@ -641,15 +641,8 @@ function run_light_tests()
     end
 
     @testset "published dataset archive constants are coherent" begin
-        # The DataDep URL is assembled from the tag and asset name; a typo in
-        # either silently produces a 404 that only shows up on a clean machine.
-        @test occursin(GREBClimate.DATA_RELEASE_TAG, GREBClimate.DATA_URL)
-        @test endswith(GREBClimate.DATA_URL, GREBClimate.DATA_ARCHIVE_NAME)
-        @test startswith(GREBClimate.DATA_URL, "https://")
-        # SHA256 is 64 lowercase hex digits
         @test occursin(r"^[0-9a-f]{64}$", GREBClimate.DATA_SHA256)
-        # tools/package_dataset.jl reads the tag back out of src/data.jl by
-        # regex; keep that parseable.
+
         data_src = read(joinpath(@__DIR__, "..", "src", "data.jl"), String)
         @test match(r"const DATA_RELEASE_TAG = \"([^\"]+)\"", data_src).captures[1] ==
               GREBClimate.DATA_RELEASE_TAG

@@ -9,6 +9,12 @@ description: Record an investigation, measurement, or decision in GREBClimate.jl
 what was tried, what the measurement was, what was rejected and why, and what
 is still open. `.claude/notes/INDEX.md` is the map.
 
+**These notes are gitignored** — local working material, not part of the
+package. A fresh clone will not have them, so never point user-facing
+documentation (`README.md`, `docs/src/`, `CHANGELOG.md`) at a path under
+`.claude/notes/`: it would be a dead link for everyone but the author. Refer to
+"the maintainers' working notes" in prose instead.
+
 Read the relevant note **before** starting an investigation. Several things in
 here were already measured and deliberately rejected; re-deriving them wastes a
 session and risks contradicting a recorded decision.
@@ -84,8 +90,9 @@ Section numbers of the form §N.M inside these notes refer to the *old*
 mapping table is at the bottom of `INDEX.md`. Leave those references alone —
 rewriting them would break the audit trail in `audit-history.md`.
 
-When adding a cross-reference between notes, use a relative link
-(`[`performance.md`](performance.md)`) so it resolves on GitHub.
+When adding a cross-reference between notes, use a plain relative link
+(`[performance.md](performance.md)`) so it resolves in a local editor. These
+files are not published anywhere, so nothing needs to resolve on GitHub.
 
 ## Related
 

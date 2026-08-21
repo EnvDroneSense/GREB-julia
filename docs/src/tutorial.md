@@ -81,7 +81,7 @@ Ts_global_mean = [mean(rec.Ts) for rec in result.ctrl]
 
 Some runs legitimately need no dataset: tests that exercise configuration or
 CO₂-scenario plumbing rather than physics, and the package's own
-precompilation, which must not require a 580 MB download. These opt in
+precompilation, which must not require a 353 MB download. These opt in
 explicitly:
 
 ```julia
@@ -96,7 +96,6 @@ use them to check shapes and code paths, never climate numbers.
 - The [API Reference](@ref) lists every exported function and type.
 - The [Physics Switches](@ref) page documents every `PhysicsConfig` field.
 - `benchmark/run_benchmarks.jl` micro-benchmarks the per-timestep physics
-  kernels; `.claude/notes/performance.md` in the repository tracks results
-  across optimization passes.
+  kernels (`year`, `stages`, `threads` and `alloc` modes).
 - `test/runtests.jl` doubles as executable documentation for individual
   kernels' behavior under different config switches.

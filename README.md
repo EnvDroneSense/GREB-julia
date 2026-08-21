@@ -197,23 +197,34 @@ reproducible `tar.gz`, and prints the SHA256 to paste into `DATA_SHA256` in
 ### Directory Structure
 
 ```
-greb_input_data/
+greb_input_data/                    # 39 files, ~439 MB
 ├── static/
 │   ├── global.topography.jld2      # 2D (96×48)
 │   └── greb.glaciers.jld2          # 2D (96×48)
-├── climatology/
-│   ├── ncep.tsurf.1948-2007.clim.jld2       # 3D (96×48×730)
+├── climatology/                    # 31 files; all 3D (96×48×730) unless noted
+│   │   # dataset=:ncep
+│   ├── ncep.tsurf.1948-2007.clim.jld2
 │   ├── ncep.zonal_wind.850hpa.clim.jld2
 │   ├── ncep.meridional_wind.850hpa.clim.jld2
 │   ├── ncep.atmospheric_humidity.clim.jld2
-│   ├── ncep.soil_moisture.clim.jld2
+│   ├── ncep.soil_moisture.clim.jld2        # also used by dataset=:era
+│   │   # dataset=:era (alternative to the ncep.* four above)
+│   ├── erainterim.tsurf.1979-2015.clim.jld2
+│   ├── erainterim.zonal_wind.850hpa.clim.jld2
+│   ├── erainterim.meridional_wind.850hpa.clim.jld2
+│   ├── erainterim.atmospheric_humidity.clim.jld2
+│   │   # common to both datasets
 │   ├── isccp.cloud_cover.clim.jld2
 │   ├── woce.ocean_mixed_layer_depth.clim.jld2
 │   ├── Tocean.clim.jld2
 │   ├── erainterim.omega.vertmean.clim.jld2
 │   ├── erainterim.omega_std.vertmean.clim.jld2
 │   ├── erainterim.windspeed.850hpa.clim.jld2
-│   └── flux_corrections.jld2       # Tsurf/vapour/Tocean flux corrections, combined (always loaded together)
+│   ├── flux_corrections.jld2       # Tsurf/vapour/Tocean corrections, combined (always loaded together)
+│   │   # CMIP5 RCP8.5 anomalies - climate-change experiments only
+│   ├── cmip5.{tsurf,zonal.wind,meridional.wind,windspeed,omega}.rcp85.ensmean.forcing.jld2
+│   │   # ENSO anomalies - :elnino / :lanina only (10 files)
+│   └── erainterim.{tsurf,zonal.wind,meridional.wind,windspeed,omega}.{elnino,lanina}.forcing.jld2
 ├── solar/
 │   └── solar_radiation.clim.jld2   # 2D (48×730)
 ├── solar_scenarios/                # Optional
@@ -362,17 +373,15 @@ GREBClimate.jl/
 │   └── package_dataset.jl       # build the published dataset archive + SHA256
 ├── DATA_README.md              # raw .bin input inventory (maintainers only)
 ├── CHANGELOG.md                # user-facing changelog
-└── .claude/                    # agent-facing material, not needed to use the package
-    ├── skills/                 # task playbooks (benchmarking, docs checks, dev notes)
-    └── notes/                  # dev notes, one file per investigation — see INDEX.md
+└── .claude/skills/             # agent task playbooks (benchmarking, docs checks)
 ```
 
-Two directories are expected at runtime but not committed (both gitignored,
-see [Input Data](#-input-data)):
+Not committed, but expected at runtime or used by maintainers (all gitignored):
 
 ```
-greb_input_data/                # the .jld2 dataset the model reads (~580 MB)
-Data/                           # raw GREB .bin inputs, only needed to regenerate the above
+greb_input_data/                # the .jld2 dataset the model reads (~439 MB, auto-downloaded)
+Data/                           # raw GREB .bin inputs, only to regenerate the above (~581 MB)
+.claude/notes/                  # maintainers' working notes
 ```
 
 ## 🔬 Key Model Components
