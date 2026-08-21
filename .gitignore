@@ -12,6 +12,6 @@
 # example outputs
 /examples/*.png
 
-# Local model input data (not committed — see DATA_README.md)
+# Local model input data (not committed - see DATA_README.md)
 /Data/
 /greb_input_data/
