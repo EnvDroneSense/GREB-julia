@@ -284,6 +284,7 @@ function load_greb_jld2!(jld2_dir::String; dataset::Symbol=:ncep)
     @. fields.vclim_m = ifelse(fields.vclim >= 0.0, fields.vclim, 0.0)
     @. fields.vclim_p = ifelse(fields.vclim < 0.0, fields.vclim, 0.0)
 
+    fields.loaded = true
     println("✅ All GREB data loaded successfully from JLD2")
     return fields
 end

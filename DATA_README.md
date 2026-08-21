@@ -1,22 +1,37 @@
-# GREB Model Input Data Guide
+# GREB Raw Input Data Inventory (maintainers)
 
-This document describes the **raw** `.bin` input data required to run the GREB
-climate model. The model itself reads a converted `.jld2` dataset (see
-[README.md](README.md#-input-data)) - run `scripts/convert_greb_to_jld2.jl`
-against the raw files described below to produce it.
+> **You do not need this to run the model.** GREBClimate reads a prepared
+> `.jld2` dataset - see [README.md, "Getting the data"](README.md#getting-the-data).
+> This document is the inventory of the **raw** GREB `.bin` files from which
+> that dataset is *generated*, and is only relevant if you are regenerating or
+> extending it.
+>
+> The raw files are collated from several upstream sources (NCEP, ERA-Interim,
+> ISCCP, WOCE, CMIP5, IPCC scenario tables) and are not redistributed from this
+> repository.
+
+Once the raw files are in place, produce the `.jld2` dataset with:
+
+```bash
+julia --project=. scripts/convert_greb_to_jld2.jl <input_dir> [output_dir]
+# output_dir defaults to greb_input_data/
+```
 
 ## 📁 Data Directory Structure
 
-Create the following directory structure in your project:
+The converter expects the `.bin`/`.ctl`/`.txt` files **flat** in the input
+directory, with solar-forcing scenarios in an optional subdirectory:
 
 ```
-ClimaModel/
-└── Data/
-    └── input/
-        ├── [climate data files - see below]
-        └── solar_forcing_scenarios/
-            └── [optional solar forcing files]
+Data/                                  # <input_dir>; the converter's default
+├── [climate data files - see below]   # *.bin + matching *.ctl, flat
+├── ipcc.scenario.*.forcing.txt        # CO2 scenario tables
+└── solar_forcing_scenarios/           # optional
+    └── greb.solar.*.bin
 ```
+
+Any directory works - pass it as the first argument. The default is `Data/`
+relative to the repository root.
 
 ## 📋 Required Input Files
 

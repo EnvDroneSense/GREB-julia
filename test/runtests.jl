@@ -101,13 +101,13 @@ function run_light_tests()
         fields = ClimateFields()
         cfg_regional = PhysicsConfig(experiment=:regional_co2_nh)
         redirect_stdout(devnull) do
-            greb_model!(RunSpec(scnr = 0), cfg_regional; jld2_dir = "", fields = fields)
+            greb_model!(RunSpec(scnr = 0), cfg_regional; jld2_dir = "", fields = fields, allow_uninitialized = true)
         end
         @test any(!=(1.0), fields.co2_part)  # regional run actually changed the mask
 
         cfg_plain = create_experiment_config(:full_model)
         redirect_stdout(devnull) do
-            greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields)
+            greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields, allow_uninitialized = true)
         end
         @test all(==(1.0), fields.co2_part)  # init_model! resets it back to full CO2
     end
@@ -603,6 +603,67 @@ function run_light_tests()
         rm(missing_parent; recursive = true, force = true)
     end
 
+    @testset "converter allowlist matches what src/io.jl loads" begin
+        # scripts/convert_greb_to_jld2.jl used to convert every .bin it found,
+        # emitting 11 .jld2 files (~148 MB) the model never opens. It now filters
+        # on MODEL_FIELD_NAMES. This test keeps that list and src/io.jl's actual
+        # loads from drifting apart in either direction.
+        #
+        # Both sides are read as text rather than executed: including the
+        # converter would run its top-level code, and io.jl's loads are spread
+        # across several functions with no single introspectable list.
+        repo = normpath(joinpath(@__DIR__, ".."))
+        conv = read(joinpath(repo, "scripts", "convert_greb_to_jld2.jl"), String)
+        io_src = read(joinpath(repo, "src", "io.jl"), String)
+
+        # --- the allowlist, as literals inside the MODEL_FIELD_NAMES block ---
+        m = match(r"const MODEL_FIELD_NAMES = Set\{String\}\(\[(.*?)
+\]\)"s, conv)
+        @test m !== nothing
+        # Cut at the ENSO comprehension: its "zonal.wind"/"meridional.wind"
+        # tokens are field-name *fragments*, not file names, and it is expanded
+        # explicitly below.
+        body = m.captures[1]
+        cut = findfirst("(\"erainterim.", body)
+        cut === nothing || (body = body[1:first(cut)-1])
+        allowed = Set{String}()
+        for lit in eachmatch(r"\"([^\"]+)\"", body)
+            s = lit.captures[1]
+            if occursin('$', s)
+                continue          # the ENSO comprehension template, expanded below
+            elseif occursin('.', s) && !occursin(' ', s)
+                push!(allowed, s)
+            end
+        end
+        # expand the ENSO comprehension the same way the converter does
+        for f in ("tsurf", "zonal.wind", "meridional.wind", "windspeed", "omega"),
+            s in ("elnino", "lanina")
+            push!(allowed, "erainterim.$f.$s.forcing")
+        end
+        @test length(allowed) == 33
+
+        # --- what io.jl actually loads, with $suffix expanded ---
+        loaded = Set{String}()
+        for m2 in eachmatch(r"\"([A-Za-z0-9_.\$-]+)\.jld2\"", io_src)
+            name = m2.captures[1]
+            # combined multi-field files are not per-field entries in the allowlist
+            name in ("flux_corrections", "ipcc_scenarios", "solar_paleo",
+                     "solar_eccentricity", "solar_obliquity") && continue
+            if occursin("\$suffix", name)
+                for s in ("elnino", "lanina")
+                    push!(loaded, replace(name, "\$suffix" => s))
+                end
+            else
+                push!(loaded, name)
+            end
+        end
+
+        # Every field io.jl loads must be produced by the converter, and the
+        # converter must not carry entries nothing loads.
+        @test isempty(setdiff(loaded, allowed))
+        @test isempty(setdiff(allowed, loaded))
+    end
+
 end
 
 function run_heavy_tests()
@@ -610,7 +671,7 @@ function run_heavy_tests()
     @testset "greb_model! baseline: default config runs to completion with the right output shape" begin
         cfg = create_experiment_config(:full_model)
         result = redirect_stdout(devnull) do
-            greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = "")
+            greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = "", allow_uninitialized = true)
         end
         @test length(result.ctrl) == 12
         @test length(result.scnr) == 0
@@ -637,7 +698,7 @@ function run_heavy_tests()
             cfg.log_qflux_dmc = true
             fields = ClimateFields()
             redirect_stdout(devnull) do
-                greb_model!(RunSpec(flux = 1, ctrl = 0, scnr = 0), cfg; jld2_dir = tmpdir, fields = fields)
+                greb_model!(RunSpec(flux = 1, ctrl = 0, scnr = 0), cfg; jld2_dir = tmpdir, fields = fields, allow_uninitialized = true)
             end
 
             @test all(==(42.0), fields.TF_correct)
@@ -658,7 +719,7 @@ function run_heavy_tests()
             cfg.log_eva = log_eva
             cfg.log_rain = log_rain
             result = redirect_stdout(devnull) do
-                greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = "")
+                greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = "", allow_uninitialized = true)
             end
             @test length(result.ctrl) == 12
         end
@@ -715,7 +776,7 @@ function run_heavy_tests()
             cfg = create_experiment_config(:paleo_231kyr)
             captured = mktemp() do path, io
                 result = redirect_stdout(io) do
-                    greb_model!(RunSpec(ctrl = 0), cfg; jld2_dir = tmpdir, fields = fields)
+                    greb_model!(RunSpec(ctrl = 0), cfg; jld2_dir = tmpdir, fields = fields, allow_uninitialized = true)
                 end
                 flush(io)
                 (result = result, text = read(path, String))
@@ -732,7 +793,7 @@ function run_heavy_tests()
 
             cfg_plain = create_experiment_config(:full_model)
             redirect_stdout(devnull) do
-                greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields)
+                greb_model!(RunSpec(scnr = 0), cfg_plain; jld2_dir = "", fields = fields, allow_uninitialized = true)
             end
             @test fields.sw_solar == saved_sw_solar
         finally
@@ -782,7 +843,7 @@ function run_heavy_tests()
 
         cfg = PhysicsConfig(experiment = :sst_plus1)
         result = redirect_stdout(devnull) do
-            greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+            greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "", allow_uninitialized = true)
         end
         @test length(result.scnr) == 12
 
@@ -804,7 +865,7 @@ function run_heavy_tests()
             for sym in (:rcp26, :rcp45, :rcp60)
                 cfg = PhysicsConfig(experiment = sym)
                 result = redirect_stdout(devnull) do
-                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_rcp)
+                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_rcp, allow_uninitialized = true)
                 end
                 @test length(result.scnr) == 12
                 @test cfg.co2_scenario == Dict(1950 => expected_rcp_co2[sym])
@@ -821,7 +882,7 @@ function run_heavy_tests()
 
             cfg = create_experiment_config(:custom_co2; co2_path = co2_path)
             result = redirect_stdout(devnull) do
-                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "")
+                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = "", allow_uninitialized = true)
             end
             @test length(result.scnr) == 12
             @test cfg.co2_scenario == Dict(1950 => 300.0, 1951 => 301.0)
@@ -829,7 +890,7 @@ function run_heavy_tests()
             # Unset custom_co2_path must raise a clear error, not silently
             # dispatch or default.
             cfg_unset = PhysicsConfig(experiment = :custom_co2)
-            @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg_unset; jld2_dir = "")
+            @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg_unset; jld2_dir = "", allow_uninitialized = true)
         finally
             rm(tmpdir_custom; recursive = true, force = true)
         end
@@ -838,13 +899,13 @@ function run_heavy_tests()
         # smoke tests.
         cfg_dmc = create_experiment_config(:decon_mean_climate)
         result_dmc = redirect_stdout(devnull) do
-            greb_model!(RunSpec(ctrl = 1, scnr = 0), cfg_dmc; jld2_dir = "")
+            greb_model!(RunSpec(ctrl = 1, scnr = 0), cfg_dmc; jld2_dir = "", allow_uninitialized = true)
         end
         @test length(result_dmc.ctrl) == 12
 
         cfg_drsp = create_experiment_config(:decon_2xco2)
         result_drsp = redirect_stdout(devnull) do
-            greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg_drsp; jld2_dir = "")
+            greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg_drsp; jld2_dir = "", allow_uninitialized = true)
         end
         @test length(result_drsp.scnr) == 12
 
@@ -863,7 +924,7 @@ function run_heavy_tests()
             for sym in (:ssp119, :ssp126, :ssp245, :ssp460, :ssp585)
                 cfg = PhysicsConfig(experiment = sym)
                 result = redirect_stdout(devnull) do
-                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_ssp)
+                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_ssp, allow_uninitialized = true)
                 end
                 @test length(result.scnr) == 12
                 @test cfg.co2_scenario == Dict(1950 => expected_co2[sym])
@@ -873,7 +934,7 @@ function run_heavy_tests()
             # than silently defaulting.
             cfg_missing_year = PhysicsConfig(experiment = :ssp585)
             @test_throws ErrorException greb_model!(RunSpec(ctrl = 0, scnr = 2), cfg_missing_year;
-                jld2_dir = tmpdir_ssp)
+                jld2_dir = tmpdir_ssp, allow_uninitialized = true)
         finally
             rm(tmpdir_ssp; recursive = true, force = true)
         end
@@ -887,7 +948,7 @@ function run_heavy_tests()
 
             cfg = PhysicsConfig(experiment = :historical_co2)
             result = redirect_stdout(devnull) do
-                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_hist)
+                greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir_hist, allow_uninitialized = true)
             end
             @test length(result.scnr) == 12
             @test isapprox(cfg.co2_scenario[1850], 280.73; atol = 1e-3)
@@ -919,7 +980,7 @@ function run_heavy_tests()
             for sym in (:paleo_solar_modern_co2, :obliquity, :eccentricity)
                 cfg = PhysicsConfig(experiment = sym)
                 result = redirect_stdout(devnull) do
-                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir)
+                    greb_model!(RunSpec(ctrl = 0, scnr = 1), cfg; jld2_dir = tmpdir, allow_uninitialized = true)
                 end
                 @test length(result.scnr) == 12
             end

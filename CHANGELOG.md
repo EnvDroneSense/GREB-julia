@@ -4,11 +4,11 @@ Notable changes to GREBClimate.jl, in roughly chronological order. Loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) conventions;
 since the package hasn't had its first registered release yet, entries are
 grouped by development phase rather than version number. For the detailed,
-pass-by-pass discovery narrative behind any entry below — which bug, how it
-was found, how it was verified against the Fortran reference — see
-[`claude/AUDIT_LOG.md`](claude/AUDIT_LOG.md).
+pass-by-pass discovery narrative behind any entry below - which bug, how it
+was found, how it was verified against the Fortran reference - see
+[`.claude/notes/audit-history.md`](.claude/notes/audit-history.md).
 
-## [Unreleased] — toward v1.0.0 / first registration
+## [Unreleased] - toward v1.0.0 / first registration
 
 ### Renamed
 - Package `GREB` → `GREBClimate`; repository `GREB-julia` → `GREBClimate.jl`
@@ -16,8 +16,17 @@ was found, how it was verified against the Fortran reference — see
   characters).
 
 ### Added
-- Documenter.jl site — tutorial, API reference, and a physics-switches guide
-  — deployed to GitHub Pages.
+- `greb_model!` now refuses an uninitialized `ClimateFields` (all-zero
+  climatology) rather than silently simulating a physically meaningless
+  ~-40 °C world. `ClimateFields` carries a `loaded` flag set by
+  `load_greb_jld2!`; genuinely data-free runs - package precompilation and
+  config/scenario-plumbing tests - opt in with `allow_uninitialized=true`.
+- `scripts/convert_greb_to_jld2.jl` filters on an explicit `MODEL_FIELD_NAMES`
+  allowlist, so it no longer emits 11 `.jld2` files (~148 MB) that nothing
+  reads. `--all` restores the previous convert-everything behaviour. A test
+  asserts the allowlist and `src/io.jl`'s loads agree in both directions.
+- Documenter.jl site - tutorial, API reference, and a physics-switches guide
+  - deployed to GitHub Pages.
 - CI: matrix over Julia `1.10`/`1`, split into `light`/`heavy` test shards.
 - A benchmark suite (`benchmark/run_benchmarks.jl`) with `year`/`stages`/
   `threads`/`alloc` modes.
@@ -34,23 +43,37 @@ was found, how it was verified against the Fortran reference — see
   precision.
 
 ### Fixed
+- **README quick-start produced wrong results.** The documented first run
+  called `load_greb_jld2!` and discarded its return value, so the model ran on
+  a zero climatology and reported a global-mean surface temperature of
+  233 K (-40 °C) instead of 277 K (14.8 °C) - while printing
+  `✅ All GREB data loaded successfully` and passing `all(isfinite, Ts)`. The
+  snippet now threads `fields` through, and the API refuses the mistake.
+- A second instance of the same pattern in README §Loading Data.
+- `scripts/convert_greb_to_jld2.jl` defaulted its input directory to
+  `Data/input`, which does not exist - the layout is flat `Data/` plus
+  `Data/solar_forcing_scenarios/` - so the documented no-argument invocation
+  always failed. Corrected, with an actionable error when the directory is
+  missing.
+- `docs/src/index.md` claimed Julia 1.9; `Project.toml` requires 1.10.
+- `docs/src/tutorial.md` referenced a `claude/BENCHMARKS.md` that never existed.
 18 correctness bugs found by direct comparison against the Fortran
 reference (`greb.model.mscm.f90`); the ones with the widest-reaching impact:
 
 - `circulation!` left a stale moisture-convergence term in every
   temperature sub-step of every default run.
 - `set_hydrology_parameters!` wrote to disconnected module globals instead
-  of the config struct — the `log_rain` switch had zero effect on any run.
+  of the config struct - the `log_rain` switch had zero effect on any run.
 - `hydro!`'s `log_eva` modes `1`/`2` silently duplicated mode `-1`'s formula
   instead of using their own coefficients.
 - `deep_ocean!` cut off ocean-atmosphere heat exchange under sea ice and in
   high-latitude winters.
 - 19 of 36 exported functions had docstrings silently detached from their
   definitions by a comment-placement pattern that breaks Julia's `@doc`
-  binding — found while wiring up the Documenter.jl site.
+  binding - found while wiring up the Documenter.jl site.
 
 The remaining 13 fixes, plus one investigated-and-reverted finding, are
-detailed in `claude/AUDIT_LOG.md`.
+detailed in `.claude/notes/audit-history.md`.
 
 ### Performance
 - ~2.31× faster per simulated year (2.7s → 1.17s) from 3-way threading of
@@ -58,9 +81,17 @@ detailed in `claude/AUDIT_LOG.md`.
 - `Float32` throughout: a further ~1.6× on top of threading, with output
   validated against the previous `Float64` path to well under 0.01 K.
 - Flux-correction files (`Tsurf`/`vapour`/`Tocean` corrections) merged into
-  a single `flux_corrections.jld2` — ~35% faster to load, no size penalty.
+  a single `flux_corrections.jld2` - ~35% faster to load, no size penalty.
 
 ### Changed
+- User-facing data documentation now describes obtaining the prepared `.jld2`
+  bundle. `DATA_README.md` and the `.bin` converter are labelled as maintainer
+  tooling, which is what they are - the raw inputs are collated from several
+  upstream sources and are not redistributed. Distribution via DataDeps.jl is
+  planned; see `.claude/notes/data-distribution.md`.
+- Development notes moved from `claude/` to `.claude/notes/`, split by topic
+  with an explicit status (Done / Investigated / Open / Planned) per file and
+  an `INDEX.md`. This also removes the `claude/` vs `.claude/` name collision.
 - `src/GREB.jl`, originally a single 2,245-line file, split into topical
   files (`constants`, `config`, `state`, `io`, `physics/`, `circulation`,
   `tendencies`, `output`, `postprocess`, `model`).

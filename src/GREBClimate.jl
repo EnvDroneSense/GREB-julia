@@ -50,11 +50,11 @@ using Logging: with_logger, NullLogger
     with_logger(NullLogger()) do
         redirect_stdout(devnull) do
             cfg = create_experiment_config(:full_model)
-            greb_model!(RunSpec(scnr=0), cfg; jld2_dir="")
+            greb_model!(RunSpec(scnr=0), cfg; jld2_dir="", allow_uninitialized=true)
 
             cfg_eva0 = create_experiment_config(:full_model)
             cfg_eva0.log_eva = 0
-            greb_model!(RunSpec(scnr=0), cfg_eva0; jld2_dir="")
+            greb_model!(RunSpec(scnr=0), cfg_eva0; jld2_dir="", allow_uninitialized=true)
         end
     end
 end

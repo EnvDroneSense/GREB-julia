@@ -1,4 +1,13 @@
-# GREBClimate.jl — Audit Log
+# Audit history (forensic narrative)
+
+**Status:** Done — historical record. Append new passes; do not rewrite old ones.
+
+Pass-by-pass account of how each bug was found, including the reasoning that
+led to it and the benchmark methodology behind the numbers quoted elsewhere.
+The *outcomes* are summarized in [`bugs-fixed.md`](bugs-fixed.md); this file is
+the why-and-how.
+
+---
 
 Forensic, pass-by-pass companion to [`IMPROVEMENTS.md`](IMPROVEMENTS.md). That
 document tracks the *current* state of the code; this one is an append-only

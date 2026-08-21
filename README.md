@@ -4,7 +4,9 @@
 [![Pluto](https://img.shields.io/badge/Pluto-Interactive-purple)](https://github.com/fonsp/Pluto.jl)
 [![docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://EnvDroneSense.github.io/GREBClimate.jl/)
 
-A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. This implementation runs in an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook with process isolation capabilities for decomposition experiments.
+A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University.
+
+GREBClimate is a **Julia package**: you call it from a script or the REPL, and nothing is held as module-global state. An interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook ships alongside it (`notebooks/GREB_julia.jl`) for widget-driven exploration and process-isolation decomposition experiments, but it is one front-end onto the package rather than the model itself.
 
 ---
 > **Repository layout:** GREB is now organized as a standard Julia package,
@@ -19,10 +21,16 @@ A high-performance Julia translation of the **Globally Resolved Energy Balance (
 > ```julia
 > julia --project=.                 # activate the package env
 > using GREBClimate
-> cfg = create_experiment_config(:full_model)
-> load_greb_jld2!("greb_input_data"; dataset=:ncep)
-> result = greb_model!(RunSpec(), cfg)   # flux=0, ctrl=1, scnr=1 years
+> cfg    = create_experiment_config(:full_model)
+> fields = load_greb_jld2!("greb_input_data"; dataset=:ncep)
+> result = greb_model!(RunSpec(), cfg;    # flux=0, ctrl=1, scnr=1 years
+>                      jld2_dir="greb_input_data", fields=fields)
 > ```
+> `load_greb_jld2!` **returns** the loaded climatology - it does not populate
+> global state - so the result must be handed to `greb_model!` via `fields=`.
+> Omitting it is refused rather than silently run; see
+> [Uninitialized fields](#uninitialized-fields) below.
+>
 > Run the tests with `julia --project=. -e 'using Pkg; Pkg.test()'`, or the full
 > driver with `julia --project=. examples/run_greb.jl <path/to/greb_input_data>`.
 
@@ -116,14 +124,44 @@ Open `GREB_julia.jl` from the Pluto interface.
 
 The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) - a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text). `load_greb_jld2!` loads this data directly into `Float32` `ClimateFields` - the same precision the model computes in throughout, so no promotion happens at load time.
 
-In the original model these were all separate `.bin` files. `scripts/convert_greb_to_jld2.jl` converts the raw GREB `.bin` input files (see [DATA_README.md](DATA_README.md) for their expected layout, normally under `Data/input/`) into this `.jld2` layout:
+### Getting the data
 
-```bash
-julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
-# defaults: input_dir=Data/input, output_dir=greb_input_data
+The dataset is ~580 MB, so it is **not** committed to the repository
+(`greb_input_data/` is gitignored). Request the prepared `.jld2` bundle from
+the maintainers, unpack it anywhere on disk, and point the model at that
+directory:
+
+```julia
+fields = load_greb_jld2!("/path/to/greb_input_data"; dataset=:ncep)
 ```
 
-These data files are too large to upload to GitHub but can be made available on request, or regenerated from the raw `.bin` files with the converter script.
+Every entry point takes the directory as an argument, so it does not have to
+live inside the repository. `examples/run_greb.jl` additionally reads the
+`GREB_DATA` environment variable, which is the least repetitive option if you
+run the model often:
+
+```bash
+export GREB_DATA=/path/to/greb_input_data
+julia --project=. examples/run_greb.jl
+```
+
+> **Planned:** distribution via [DataDeps.jl](https://github.com/oxinabox/DataDeps.jl),
+> so `using GREBClimate` fetches and caches the `.jld2` bundle on first use and
+> the manual download step disappears. Not yet implemented - the manual path
+> above is the current one. Tracked in
+> [`.claude/notes/data-distribution.md`](.claude/notes/data-distribution.md).
+
+### Regenerating the data from raw `.bin` files (maintainers)
+
+You do **not** need this to run the model - it is how the `.jld2` bundle above
+is produced in the first place. The raw GREB `.bin` inputs are collated from
+several upstream sources and are not redistributed here;
+[DATA_README.md](DATA_README.md) documents the files and their layout.
+
+```bash
+julia --project=. scripts/convert_greb_to_jld2.jl <input_dir> [output_dir]
+# output_dir defaults to greb_input_data/
+```
 
 ### Directory Structure
 
@@ -155,14 +193,40 @@ greb_input_data/
     ├── ipcc_scenarios.jld2        # Dict{String,Dict{Int,Float64}}, keyed "rcp85"/"ssp585"/"hist"/...
     │                              # ("hist" backs :historical_co2, which starts at year 1850 not 1950)
     └── historical_emissions_population.jld2   # year => (co2_emissions_gt_co2_yr, population_billions)
+                                    # not read by the model itself — used by tests and
+                                    # available for analysis scripts
 ```
 
 ### Loading Data
 
-In the notebook, set the `jld2_dir` variable and run:
+```julia
+fields = load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
+```
+
+`load_greb_jld2!` returns a [`ClimateFields`](https://EnvDroneSense.github.io/GREBClimate.jl/)
+holding the climatology, derived grid geometry, flux corrections and solar
+table. It is a value, not global state: hold several independent instances in
+one session (e.g. for parameter sweeps), and pass the one you want into
+`greb_model!` with `fields=`.
+
+#### Uninitialized fields
+
+A bare `ClimateFields()` is all zeros. Stepping the model on a zero
+climatology runs to completion but yields a physically meaningless world
+(global-mean Ts ≈ 233 K / −40 °C), so `greb_model!` **refuses** it rather than
+returning plausible-looking nonsense:
 
 ```julia
-load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
+julia> greb_model!(RunSpec(), cfg)          # forgot fields=
+ERROR: greb_model! was given an uninitialized ClimateFields (all-zero climatology).
+```
+
+Data-free runs are legitimate for config- and scenario-plumbing tests (and for
+package precompilation, which must not require the dataset). Those opt in
+explicitly:
+
+```julia
+greb_model!(RunSpec(scnr=0), cfg; jld2_dir="", allow_uninitialized=true)
 ```
 
 ---
@@ -254,12 +318,28 @@ GREBClimate.jl/
 │   ├── postprocess.jl          # monthly climatology/anomalies
 │   └── model.jl                # init_model!/qflux_correction!/greb_model!
 ├── test/runtests.jl            # unit, integration, and golden-regression tests
-├── docs/                       # Documenter.jl site (API reference + tutorial)
-├── examples/run_greb.jl        # plain-Julia driver (no Pluto)
-├── notebooks/GREB_julia.jl     # original interactive Pluto notebook (unchanged)
-├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter
+├── benchmark/run_benchmarks.jl # timing/allocation suite for the physics kernels
+├── docs/                       # Documenter.jl site (index, tutorial, switches, API)
+├── examples/run_greb.jl        # plain-Julia driver (no Pluto) — start here
+├── notebooks/
+│   ├── GREB_julia.jl           # interactive Pluto notebook (own Project.toml)
+│   ├── PultoUI.jl              # work-in-progress UI experiments — not wired up
+│   └── launch_pluto.jl         # convenience launcher
+├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter (maintainers only)
+├── DATA_README.md              # raw .bin input inventory (maintainers only)
 ├── CHANGELOG.md                # user-facing changelog
-└── claude/                     # dev notes: IMPROVEMENTS.md (current state), AUDIT_LOG.md (forensic audit trail)
+├── archive/                    # pre-package snapshot of the notebook, kept for diffing
+└── .claude/                    # agent-facing material, not needed to use the package
+    ├── skills/                 # task playbooks (benchmarking, docs checks, dev notes)
+    └── notes/                  # dev notes, one file per investigation — see INDEX.md
+```
+
+Two directories are expected at runtime but not committed (both gitignored,
+see [Input Data](#-input-data)):
+
+```
+greb_input_data/                # the .jld2 dataset the model reads (~580 MB)
+Data/                           # raw GREB .bin inputs, only needed to regenerate the above
 ```
 
 ## 🔬 Key Model Components

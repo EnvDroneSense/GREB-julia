@@ -1,4 +1,12 @@
-# GREB.jl expansion notes: ensemble/multi-run + differentiability
+# Ensembles / multi-run and differentiability
+
+**Status:** Investigated — costs measured, differentiability partially blocked. Not started.
+
+What was actually tried for ensemble/multi-run support and for making the model
+differentiable, with measured costs and the specific blockers found. Read this
+before re-opening either topic.
+
+---
 
 This document is a planning/audit reference, not an implementation record —
 no code in `src/` changed as part of producing it. It answers, with actual
