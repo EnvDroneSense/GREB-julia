@@ -19,7 +19,7 @@ end
 # ╔═╡ b4c864aa-98e3-4197-9d1d-8c72298ee9b2
 begin
 	using PrecompileTools
-	include(joinpath(@__DIR__, "..", "src", "GREB.jl"))
+	include(joinpath(@__DIR__, "..", "src", "GREBClimate.jl"))
 	using .GREB
 end
 

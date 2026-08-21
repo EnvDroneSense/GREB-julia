@@ -1,5 +1,5 @@
 # =============================================================================
-# run_benchmarks.jl - dependency-free timing harness for GREB.jl
+# run_benchmarks.jl - dependency-free timing harness for GREBClimate.jl
 #
 # Four benchmarking modes, all against the real dataset, post-JIT-warmup:
 #
@@ -39,7 +39,7 @@
 # known noise sources on this machine.
 # =============================================================================
 
-using GREB
+using GREBClimate
 
 """
     time_1yr(jld2_dir; cfg=create_experiment_config(:full_model), reps=3)
@@ -112,8 +112,8 @@ function time_stages(jld2_dir::AbstractString; cfg=create_experiment_config(:ful
     q = copy(fields.qclim[:, :, end])
 
     stages = [
-        ("circulation!(Ta)", () -> circulation!(Ta, GREB.z_air, ws.dTa_crcl, fields, ws, timestate, cfg)),
-        ("circulation!(q)", () -> circulation!(q, GREB.z_vapor, ws.dq_crcl, fields, ws, timestate, cfg)),
+        ("circulation!(Ta)", () -> circulation!(Ta, GREBClimate.z_air, ws.dTa_crcl, fields, ws, timestate, cfg)),
+        ("circulation!(q)", () -> circulation!(q, GREBClimate.z_vapor, ws.dq_crcl, fields, ws, timestate, cfg)),
         ("SWradiation!", () -> SWradiation!(Ts, fields, state, timestate, cfg, ws)),
         ("LWradiation!", () -> LWradiation!(Ts, Ta, q, CO2, fields, timestate, cfg, ws)),
         ("hydro!", () -> hydro!(Ts, q, fields, timestate, cfg, ws)),

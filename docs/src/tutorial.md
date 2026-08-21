@@ -1,13 +1,13 @@
 # Tutorial
 
-This walks through the same flow as [`examples/run_greb.jl`](https://github.com/EnvDroneSense/GREB-julia/blob/main/examples/run_greb.jl):
+This walks through the same flow as [`examples/run_greb.jl`](https://github.com/EnvDroneSense/GREBClimate.jl/blob/main/examples/run_greb.jl):
 load input data, configure an experiment, run the model, and inspect the
 result.
 
 ## 1. Load input data
 
 ```julia
-using GREB
+using GREBClimate
 
 jld2_dir = "greb_dataset_jld2"   # see DATA_README.md for the expected layout
 fields = load_greb_jld2!(jld2_dir; dataset = :ncep)   # or :era

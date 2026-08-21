@@ -1,4 +1,4 @@
-# GREB.jl — Potential Improvements (Structure & Performance)
+# GREBClimate.jl — Potential Improvements (Structure & Performance)
 
 Observations and fixes for the `GREB` module, accumulated across seven audit
 passes (2026-08-05 through 2026-08-12). The model was split from a single
@@ -10,7 +10,7 @@ mutable module-level globals were replaced with explicit `ClimateFields`/
 Everything below is either **✅ done**, explicitly deferred with a reason, or
 a documented finding that was investigated and intentionally not changed.
 For the pass-by-pass discovery narrative and full benchmark methodology
-behind any entry below, see [`CHANGELOG.md`](CHANGELOG.md).
+behind any entry below, see [`AUDIT_LOG.md`](AUDIT_LOG.md).
 
 ---
 
@@ -22,7 +22,7 @@ test in `test/runtests.jl`. Passes 1–3 were found by grepping every
 config-field write against its read sites; pass 4 was a direct line-by-line
 comparison against the Fortran reference `greb.model.mscm.f90`, and every fix
 there cites the exact Fortran line(s) confirmed by direct read (not recalled
-from memory). Discovery narrative for each: `CHANGELOG.md`.
+from memory). Discovery narrative for each: `AUDIT_LOG.md`.
 
 | # | Symptom | Fix | Fortran ref |
 |---|---|---|---|
@@ -51,7 +51,7 @@ Fortran has `144.**2`) — kept unsquared, Fortran's own exponent looks like
 the anomaly given every sibling mode's gust term is 2–12 m/s; confirmed
 identical in a second Fortran copy, so not a transcription error.
 `:earth_sun_distance`'s `rS0` rescale confirmed correctly scenario-only in
-both Julia and Fortran. Full reasoning: `CHANGELOG.md`.
+both Julia and Fortran. Full reasoning: `AUDIT_LOG.md`.
 
 ---
 
@@ -124,7 +124,7 @@ also a concrete non-parametric `Float64` struct, so a real switch needs a
 `CirculationWorkspace{T}` refactor first. **Not worth it for this kernel
 shape** given §2.11 already gets 2.0× more cheaply; canceled by user
 request. Could matter more for a GPU/ensemble-batched use case (§2.11),
-untested here. Full methodology: `CHANGELOG.md`.
+untested here. Full methodology: `AUDIT_LOG.md`.
 
 **Follow-up, benchmarked (`CircularArrays.jl` for the gather pattern itself) — tried, measured, rejected.**
 An outside suggestion proposed `CircularArrays.jl` as a direct fix for the
@@ -819,7 +819,7 @@ test-suite sharding, and §2.11's 3-way `tendencies!` thread split (originally
 needed `-t 3`, not `-t 2`, to realize its full ceiling — since reversed by
 the `Float32` conversion, §2.3; `-t 2` is now the recommended default — see
 §2.11's post-`Float32` re-review) — see each section above and
-`CHANGELOG.md` for the real (not just benchmarked) numbers.
+`AUDIT_LOG.md` for the real (not just benchmarked) numbers.
 
 > ⚠️ Every performance change must be validated against a reference run —
 > "faster" only counts if output is unchanged within tolerance. Every
@@ -953,7 +953,7 @@ but-unfixed to avoid colliding with concurrent performance edits, then
 implemented in a follow-up pass once that settled. Every finding was
 verified directly against `greb.model.mscm.f90` before being fixed, and
 each has a regression test in `test/runtests.jl`. Full discovery method:
-`CHANGELOG.md`.
+`AUDIT_LOG.md`.
 
 ### 8.1 `forcing()`'s regional-CO₂ ice mask used only January, not the annual mean ✅ fixed
 `tendencies.jl:200,216` (`:regional_co2_ocean`/`:regional_co2_land_ice`) took
@@ -1072,6 +1072,14 @@ revisit before actually submitting the registration PR
 (`docs/make.jl`'s `deploydocs(repo = "github.com/EnvDroneSense/GREB-julia.git", ...)`
 and any other hardcoded repo URLs would need updating alongside the
 GitHub-side rename).
+
+**Resolved 2026-08-21:** the package name itself also needed to change —
+`GREB` is 4 characters, below AutoMerge's 5-character minimum (not
+identified as a blocker in the 9.3 audit below; found afterward). Renamed
+the package to `GREBClimate` and the repo to `GREBClimate.jl`, updating
+`docs/make.jl`'s `deploydocs` call, `Project.toml`, the module name, and
+every `using GREB`/`GREB.`-qualified reference across `src/`, `test/`,
+`examples/`, `benchmark/`, and `docs/`.
 
 ### 9.3 Registry audit summary
 

@@ -2,7 +2,7 @@
 #
 # Converts the raw GREB `.bin` input files (see DATA_README.md for the
 # expected layout, normally under `Data/input/`) into the `.jld2` dataset
-# that `load_greb_jld2!`/`GREB.read_jld2` read (see README.md's "Input Data"
+# that `load_greb_jld2!`/`GREBClimate.read_jld2` read (see README.md's "Input Data"
 # section for the resulting directory structure).
 #
 # Each field is written as its own `.jld2` file with keys "data"

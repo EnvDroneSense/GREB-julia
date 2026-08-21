@@ -1,4 +1,4 @@
-# GREB.jl
+# GREBClimate.jl
 
 A Julia translation of the **Globally Resolved Energy Balance (GREB)**
 climate model, originally developed by Dietmar Dommenget and colleagues at
@@ -23,7 +23,7 @@ Requires Julia 1.9 or later.
 
 ```julia
 using Pkg
-Pkg.develop(url = "https://github.com/EnvDroneSense/GREB-julia")
+Pkg.develop(url = "https://github.com/EnvDroneSense/GREBClimate.jl")
 ```
 
 Or, working from a clone:
@@ -37,7 +37,7 @@ using Pkg; Pkg.instantiate()
 
 The model reads **JLD2**-formatted climatology, flux-correction, and solar
 forcing files. These are too large to ship with the package; see
-[`DATA_README.md`](https://github.com/EnvDroneSense/GREB-julia/blob/main/DATA_README.md)
+[`DATA_README.md`](https://github.com/EnvDroneSense/GREBClimate.jl/blob/main/DATA_README.md)
 in the repository for the expected layout and the conversion script that
 builds a `greb_dataset_jld2/` directory from the original GREB `.bin` files.
 

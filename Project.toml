@@ -1,4 +1,4 @@
-name = "GREB"
+name = "GREBClimate"
 uuid = "128c3379-415a-4bc6-90bd-d536e37a6aec"
 authors = ["Thomas Struys", "Dietmar Dommenget and colleagues (original GREB)"]
 version = "1.0.0"

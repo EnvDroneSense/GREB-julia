@@ -1,6 +1,6 @@
 ---
 name: benchmark
-description: Run GREB.jl's timing/allocation benchmarks (benchmark/run_benchmarks.jl) and report results honestly, accounting for machine noise. Use when the user asks to benchmark, time, profile, or check performance/allocations of the model, or to compare thread counts.
+description: Run GREBClimate.jl's timing/allocation benchmarks (benchmark/run_benchmarks.jl) and report results honestly, accounting for machine noise. Use when the user asks to benchmark, time, profile, or check performance/allocations of the model, or to compare thread counts.
 ---
 
 # GREB benchmark

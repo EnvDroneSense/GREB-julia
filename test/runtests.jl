@@ -1,4 +1,4 @@
-using GREB
+using GREBClimate
 using Test
 
 # Smoke tests that do NOT require the (large, external) JLD2 input data.
@@ -18,9 +18,9 @@ const DATA_DIR = joinpath(@__DIR__, "..", "greb_dataset_jld2")
 function run_light_tests()
 
     @testset "grid constants" begin
-        @test GREB.xdim == 96
-        @test GREB.ydim == 48
-        @test GREB.nstep_yr == 730
+        @test GREBClimate.xdim == 96
+        @test GREBClimate.ydim == 48
+        @test GREBClimate.nstep_yr == 730
     end
 
     @testset "PhysicsConfig" begin
@@ -76,7 +76,7 @@ function run_light_tests()
             cfg = create_experiment_config(:full_model)
             cfg.log_rain = log_rain
             set_hydrology_parameters!(cfg)
-            expected = GREB.HYDRO_PARAMS[log_rain]
+            expected = GREBClimate.HYDRO_PARAMS[log_rain]
             @test (cfg.c_q, cfg.c_rq, cfg.c_omega, cfg.c_omegastd) == expected
         end
 
@@ -118,7 +118,7 @@ function run_light_tests()
 
         acc = MonthlyAccumulator()
         @test acc isa MonthlyAccumulator
-        @test (GREB.reset!(acc); true)   # reset! runs without error
+        @test (GREBClimate.reset!(acc); true)   # reset! runs without error
 
         ts = TimeState(1, 1)
         @test ts.jday == 1
@@ -132,13 +132,13 @@ function run_light_tests()
     @testset "build_monthly_climatology/apply_scenario_anomalies" begin
         # Hand-built records with every field filled to one scalar value
         # make the averaging arithmetic trivial to check by hand.
-        mkrec(v) =(Ts=fill(v, GREB.xdim, GREB.ydim), Ta=fill(v, GREB.xdim, GREB.ydim),
-            To=fill(v, GREB.xdim, GREB.ydim), q=fill(v, GREB.xdim, GREB.ydim),
-            albedo=fill(v, GREB.xdim, GREB.ydim), ice=fill(v, GREB.xdim, GREB.ydim),
-            precip=fill(v, GREB.xdim, GREB.ydim), evap=fill(v, GREB.xdim, GREB.ydim),
-            qcrcl=fill(v, GREB.xdim, GREB.ydim), sw=fill(v, GREB.xdim, GREB.ydim),
-            lw=fill(v, GREB.xdim, GREB.ydim), qlat=fill(v, GREB.xdim, GREB.ydim),
-            qsens=fill(v, GREB.xdim, GREB.ydim))
+        mkrec(v) =(Ts=fill(v, GREBClimate.xdim, GREBClimate.ydim), Ta=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            To=fill(v, GREBClimate.xdim, GREBClimate.ydim), q=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            albedo=fill(v, GREBClimate.xdim, GREBClimate.ydim), ice=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            precip=fill(v, GREBClimate.xdim, GREBClimate.ydim), evap=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            qcrcl=fill(v, GREBClimate.xdim, GREBClimate.ydim), sw=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            lw=fill(v, GREBClimate.xdim, GREBClimate.ydim), qlat=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            qsens=fill(v, GREBClimate.xdim, GREBClimate.ydim))
 
         @test build_monthly_climatology(MonthlyRecord[]) == MonthlyRecord[]
 
@@ -180,19 +180,19 @@ function run_light_tests()
     @testset "compute_annual_ice_climatology" begin
         # Same record-index-encodes-value trick as the climatology test
         # above: final-year-only.
-        mkrec(v) = (Ts=zeros(GREB.xdim, GREB.ydim), Ta=zeros(GREB.xdim, GREB.ydim),
-            To=zeros(GREB.xdim, GREB.ydim), q=zeros(GREB.xdim, GREB.ydim),
-            albedo=zeros(GREB.xdim, GREB.ydim), ice=fill(v, GREB.xdim, GREB.ydim),
-            precip=zeros(GREB.xdim, GREB.ydim), evap=zeros(GREB.xdim, GREB.ydim),
-            qcrcl=zeros(GREB.xdim, GREB.ydim), sw=zeros(GREB.xdim, GREB.ydim),
-            lw=zeros(GREB.xdim, GREB.ydim), qlat=zeros(GREB.xdim, GREB.ydim),
-            qsens=zeros(GREB.xdim, GREB.ydim))
+        mkrec(v) = (Ts=zeros(GREBClimate.xdim, GREBClimate.ydim), Ta=zeros(GREBClimate.xdim, GREBClimate.ydim),
+            To=zeros(GREBClimate.xdim, GREBClimate.ydim), q=zeros(GREBClimate.xdim, GREBClimate.ydim),
+            albedo=zeros(GREBClimate.xdim, GREBClimate.ydim), ice=fill(v, GREBClimate.xdim, GREBClimate.ydim),
+            precip=zeros(GREBClimate.xdim, GREBClimate.ydim), evap=zeros(GREBClimate.xdim, GREBClimate.ydim),
+            qcrcl=zeros(GREBClimate.xdim, GREBClimate.ydim), sw=zeros(GREBClimate.xdim, GREBClimate.ydim),
+            lw=zeros(GREBClimate.xdim, GREBClimate.ydim), qlat=zeros(GREBClimate.xdim, GREBClimate.ydim),
+            qsens=zeros(GREBClimate.xdim, GREBClimate.ydim))
 
         @test all(iszero, compute_annual_ice_climatology(MonthlyRecord[]))
 
         two_years = MonthlyRecord[mkrec(Float64(idx)) for idx in 1:24]
         clim = compute_annual_ice_climatology(two_years)
-        @test size(clim) == (GREB.xdim, GREB.ydim, 12)
+        @test size(clim) == (GREBClimate.xdim, GREBClimate.ydim, 12)
         for m in 1:12
             @test all(==(Float64(m + 12)), clim[:, :, m])
         end
@@ -208,13 +208,13 @@ function run_light_tests()
         ts = TimeState(1, 1)
         cfg = create_experiment_config(:full_model)
 
-        Ts = fill(288.0, GREB.xdim, GREB.ydim)
-        Ta = fill(280.0, GREB.xdim, GREB.ydim)
-        To = fill(285.0, GREB.xdim, GREB.ydim)
-        q = fill(0.006, GREB.xdim, GREB.ydim)
+        Ts = fill(288.0, GREBClimate.xdim, GREBClimate.ydim)
+        Ta = fill(280.0, GREBClimate.xdim, GREBClimate.ydim)
+        To = fill(285.0, GREBClimate.xdim, GREBClimate.ydim)
+        q = fill(0.006, GREBClimate.xdim, GREBClimate.ydim)
 
         tend = tendencies!(340.0, Ts, Ta, To, q, fields, state, ws, ts, cfg)
-        @test tend.Q_sens ≈ GREB.ct_sens .* (Ta .- Ts)
+        @test tend.Q_sens ≈ GREBClimate.ct_sens .* (Ta .- Ts)
         @test all(isfinite, tend.SW)
         @test all(isfinite, tend.LW_surf)
         @test all(isfinite, tend.dTa_crcl)
@@ -230,25 +230,25 @@ function run_light_tests()
         fields = ClimateFields()
         state = ModelState()
         ts = TimeState(1, 1)
-        z = () -> zeros(GREB.xdim, GREB.ydim)
-        surf = SurfaceState(fill(280.0, GREB.xdim, GREB.ydim), fill(270.0, GREB.xdim, GREB.ydim),
-            fill(285.0, GREB.xdim, GREB.ydim), fill(0.005, GREB.xdim, GREB.ydim))
-        tend = (albedo=fill(0.3, GREB.xdim, GREB.ydim), SW=fill(100.0, GREB.xdim, GREB.ydim),
-            ice_cover=z(), LW_surf=fill(-50.0, GREB.xdim, GREB.ydim),
-            Q_lat=fill(-20.0, GREB.xdim, GREB.ydim), Q_sens=fill(-5.0, GREB.xdim, GREB.ydim),
-            Q_lat_air=fill(20.0, GREB.xdim, GREB.ydim), dq_eva=z(),
+        z = () -> zeros(GREBClimate.xdim, GREBClimate.ydim)
+        surf = SurfaceState(fill(280.0, GREBClimate.xdim, GREBClimate.ydim), fill(270.0, GREBClimate.xdim, GREBClimate.ydim),
+            fill(285.0, GREBClimate.xdim, GREBClimate.ydim), fill(0.005, GREBClimate.xdim, GREBClimate.ydim))
+        tend = (albedo=fill(0.3, GREBClimate.xdim, GREBClimate.ydim), SW=fill(100.0, GREBClimate.xdim, GREBClimate.ydim),
+            ice_cover=z(), LW_surf=fill(-50.0, GREBClimate.xdim, GREBClimate.ydim),
+            Q_lat=fill(-20.0, GREBClimate.xdim, GREBClimate.ydim), Q_sens=fill(-5.0, GREBClimate.xdim, GREBClimate.ydim),
+            Q_lat_air=fill(20.0, GREBClimate.xdim, GREBClimate.ydim), dq_eva=z(),
             dq_rain=z(), dq_crcl=z(), dTa_crcl=z(), dT_ocean=z(), dTo=z(),
-            LW_down=fill(30.0, GREB.xdim, GREB.ydim), LW_up=fill(80.0, GREB.xdim, GREB.ydim),
-            em=fill(0.9, GREB.xdim, GREB.ydim))
+            LW_down=fill(30.0, GREBClimate.xdim, GREBClimate.ydim), LW_up=fill(80.0, GREBClimate.xdim, GREBClimate.ydim),
+            em=fill(0.9, GREBClimate.xdim, GREBClimate.ydim))
 
         ts.ityr = 1
         diagnostics!(1, 1970, 340.0, surf, tend, fields, state, ts)
         @test all(==(280.0), state.Tsmn)   # accumulated once, no averaging/reset yet
 
-        ts.ityr = GREB.nstep_yr
+        ts.ityr = GREBClimate.nstep_yr
         captured = mktemp() do path, io
             redirect_stdout(io) do
-                diagnostics!(GREB.nstep_yr, 1970, 340.0, surf, tend, fields, state, ts)
+                diagnostics!(GREBClimate.nstep_yr, 1970, 340.0, surf, tend, fields, state, ts)
             end
             flush(io)
             read(path, String)
@@ -261,19 +261,19 @@ function run_light_tests()
         ws = CirculationWorkspace()
         acc = MonthlyAccumulator()
         ts = TimeState(1, 1)
-        surf = SurfaceState(fill(280.0, GREB.xdim, GREB.ydim), fill(270.0, GREB.xdim, GREB.ydim),
-            fill(285.0, GREB.xdim, GREB.ydim), fill(0.005, GREB.xdim, GREB.ydim))
-        tend = (albedo=fill(0.3, GREB.xdim, GREB.ydim), SW=fill(100.0, GREB.xdim, GREB.ydim),
-            ice_cover=fill(0.1, GREB.xdim, GREB.ydim), LW_surf=fill(-50.0, GREB.xdim, GREB.ydim),
-            Q_lat=fill(-20.0, GREB.xdim, GREB.ydim), Q_sens=fill(-5.0, GREB.xdim, GREB.ydim))
+        surf = SurfaceState(fill(280.0, GREBClimate.xdim, GREBClimate.ydim), fill(270.0, GREBClimate.xdim, GREBClimate.ydim),
+            fill(285.0, GREBClimate.xdim, GREBClimate.ydim), fill(0.005, GREBClimate.xdim, GREBClimate.ydim))
+        tend = (albedo=fill(0.3, GREBClimate.xdim, GREBClimate.ydim), SW=fill(100.0, GREBClimate.xdim, GREBClimate.ydim),
+            ice_cover=fill(0.1, GREBClimate.xdim, GREBClimate.ydim), LW_surf=fill(-50.0, GREBClimate.xdim, GREBClimate.ydim),
+            Q_lat=fill(-20.0, GREBClimate.xdim, GREBClimate.ydim), Q_sens=fill(-5.0, GREBClimate.xdim, GREBClimate.ydim))
         ws.precip_out .= 2.0
         ws.evap_out .= 1.0
         ws.qcrcl_out .= 0.5
 
         output_buf = MonthlyRecord[]
         irec, mon = 0, 1
-        ndt = GREB.ndt_days
-        ndays_jan = GREB.cjday_mon[1]
+        ndt = GREBClimate.ndt_days
+        ndays_jan = GREBClimate.cjday_mon[1]
         for day in 1:ndays_jan, step in 1:ndt
             it = (day - 1) * ndt + step
             ts.jday = day
@@ -309,7 +309,7 @@ function run_light_tests()
         acc = MonthlyAccumulator()
         ts = TimeState(1, 1)
 
-        Ts = fill(GREB.min_T_K - 5.0, GREB.xdim, GREB.ydim)
+        Ts = fill(GREBClimate.min_T_K - 5.0, GREBClimate.xdim, GREBClimate.ydim)
         Ta = copy(ini.Ta_ini)
         To = copy(ini.To_ini)
         q = copy(ini.q_ini)
@@ -322,7 +322,7 @@ function run_light_tests()
         @test all(isfinite, Ta)
         @test all(isfinite, To)
         @test all(isfinite, q)
-        @test all(==(GREB.min_T_K), Ts)
+        @test all(==(GREBClimate.min_T_K), Ts)
         @test mon == 1
         @test irec == 0
     end
@@ -340,12 +340,12 @@ function run_light_tests()
         # (k=11, dxlat_grid[11] > 2.5e5, the plain @turbo zonal branch);
         # date-line columns 1,2,3,94,95,96 plus an interior column (50).
         fields = ClimateFields()
-        xdim_, ydim_ = GREB.xdim, GREB.ydim
+        xdim_, ydim_ = GREBClimate.xdim, GREBClimate.ydim
         T1 = Float32[100.0 * i + k for i in 1:xdim_, k in 1:ydim_]
         wz = [1.0 + 0.001 * i - 0.0005 * k for i in 1:xdim_, k in 1:ydim_]
         fields.wz_air .= wz
         fields.wz_vapor .= wz
-        for it in 1:GREB.nstep_yr, k in 1:ydim_, i in 1:xdim_
+        for it in 1:GREBClimate.nstep_yr, k in 1:ydim_, i in 1:xdim_
             fields.uclim_p[i, k, it] = 0.5 + 0.0001 * i
             fields.uclim_m[i, k, it] = 0.3 + 0.0001 * k
             fields.vclim_p[i, k, it] = 0.4 + 0.0002 * i
@@ -358,7 +358,7 @@ function run_light_tests()
         test_is = [1, 2, 3, 50, 94, 95, 96]
         test_ks = [1, 11, 48]
 
-        diffusion!(T1, GREB.z_air, fields, ws, ts)
+        diffusion!(T1, GREBClimate.z_air, fields, ws, ts)
         dX_diff_ref = Dict(
             (1,1)=>4517.8355192140425, (2,1)=>3542.95440832927, (3,1)=>2652.6121358299374,
             (50,1)=>1.2269892658145531, (94,1)=>-2709.198844945152, (95,1)=>-3576.970530673063,
@@ -374,7 +374,7 @@ function run_light_tests()
             @test isapprox(ws.dX_diff[i, k], dX_diff_ref[(i, k)]; atol=1e-3, rtol=1e-4)
         end
 
-        advection!(T1, GREB.z_air, fields, ws, ts, cfg)
+        advection!(T1, GREBClimate.z_air, fields, ws, ts, cfg)
         dX_adv_ref = Dict(
             (1,1)=>99.99281072836801, (2,1)=>37.62423619149657, (3,1)=>6.428217314852662,
             (50,1)=>-4.182755344492395, (94,1)=>11.771946283998448, (95,1)=>60.257791236566284,
@@ -391,7 +391,7 @@ function run_light_tests()
         end
 
         dX_out = zeros(xdim_, ydim_)
-        circulation!(T1, GREB.z_air, dX_out, fields, ws, ts, cfg)
+        circulation!(T1, GREBClimate.z_air, dX_out, fields, ws, ts, cfg)
         dX_out_ref = Dict(
             (1,1)=>4824.155681112328, (2,1)=>4609.661409972268, (3,1)=>4395.402855867866,
             (50,1)=>-98.5576039612888, (94,1)=>-4172.300403641432, (95,1)=>-4369.7800972827745,
@@ -409,8 +409,8 @@ function run_light_tests()
     end
 
     @testset "hydro! errors on invalid log_eva" begin
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        q = fill(0.005, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0, GREBClimate.xdim, GREBClimate.ydim)
+        q = fill(0.005, GREBClimate.xdim, GREBClimate.ydim)
         cfg = create_experiment_config(:full_model)
         cfg.log_eva = 99
         @test_throws ErrorException hydro!(Ts, q, ClimateFields(), TimeState(1, 1), cfg, CirculationWorkspace())
@@ -440,8 +440,8 @@ function run_light_tests()
         end
         cfg = create_experiment_config(:full_model)
         cfg.log_eva = 1
-        Ts = fill(290.0f0, GREB.xdim, GREB.ydim)
-        q = fill(0.008f0, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0f0, GREBClimate.xdim, GREBClimate.ydim)
+        q = fill(0.008f0, GREBClimate.xdim, GREBClimate.ydim)
         ts = TimeState(1, 1)
 
         for (topo, gust, coeff) in ((1.0, 4.0 + 144.0, 0.04), (-1.0, 9.0 + 50.41, 0.73))
@@ -451,7 +451,7 @@ function run_light_tests()
             result = hydro!(Ts, q, fields, ts, cfg, ws)
 
             qs = 3.75e-3 * exp(17.08085 * (290.0 - 273.15) / (290.0 - 273.15 + 234.175)) * fields.wz_air[1, 1]
-            expected = (q[1, 1] - qs) * sqrt(gust) * GREB.cq_latent * GREB.ρ_air * coeff * GREB.ce * 1.0
+            expected = (q[1, 1] - qs) * sqrt(gust) * GREBClimate.cq_latent * GREBClimate.ρ_air * coeff * GREBClimate.ce * 1.0
             @test isapprox(result.Q_lat[1, 1], expected; rtol = 1e-5)
         end
     end
@@ -488,17 +488,17 @@ function run_light_tests()
         cfg.c_q = 1000.0
         cfg.c_rq = 0.0; cfg.c_omega = 0.0; cfg.c_omegastd = 0.0
 
-        Ts = fill(290.0f0, GREB.xdim, GREB.ydim)
-        q = fill(0.008f0, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0f0, GREBClimate.xdim, GREBClimate.ydim)
+        q = fill(0.008f0, GREBClimate.xdim, GREBClimate.ydim)
         ts = TimeState(1, 1)
         ws = CirculationWorkspace()
         result = hydro!(Ts, q, fields, ts, cfg, ws)
 
-        expected_dq_rain = cfg.c_q * GREB.cq_rain * q[1, 1]
-        min_dq_that_would_have_clamped = -0.9 * q[1, 1] / GREB.Δt
+        expected_dq_rain = cfg.c_q * GREBClimate.cq_rain * q[1, 1]
+        min_dq_that_would_have_clamped = -0.9 * q[1, 1] / GREBClimate.Δt
         @test expected_dq_rain < min_dq_that_would_have_clamped  # sanity: the old clamp would have fired
         @test isapprox(result.dq_rain[1, 1], expected_dq_rain; rtol = 1e-5)
-        @test isapprox(result.Q_lat_air[1, 1], -expected_dq_rain * GREB.cq_latent * GREB.r_qviwv; rtol = 1e-5)
+        @test isapprox(result.Q_lat_air[1, 1], -expected_dq_rain * GREBClimate.cq_latent * GREBClimate.r_qviwv; rtol = 1e-5)
     end
 
     @testset "SWradiation! is allocation-free" begin
@@ -507,7 +507,7 @@ function run_light_tests()
         ts = TimeState(1, 1)
         ws = CirculationWorkspace()
         cfg = create_experiment_config(:full_model)
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0, GREBClimate.xdim, GREBClimate.ydim)
         SWradiation!(Ts, fields, state, ts, cfg, ws)
         @test @allocated(SWradiation!(Ts, fields, state, ts, cfg, ws)) <= 64
     end
@@ -524,7 +524,7 @@ function run_light_tests()
             result = redirect_stdout(devnull) do
                 greb_model!(RunSpec(scnr = 0), cfg; jld2_dir = DATA_DIR, fields = fields)
             end
-            q_ini = fields.qclim[:, :, GREB.nstep_yr]
+            q_ini = fields.qclim[:, :, GREBClimate.nstep_yr]
             for rec in result.ctrl
                 @test all(isapprox.(rec.q, q_ini; atol = 1e-7))
             end
@@ -542,14 +542,14 @@ function run_light_tests()
         # Synthesize a minimal dataset matching load_greb_jld2!'s expected
         # layout (src/io.jl) so both loaders' "file present"/"file missing"
         # branches are exercised without the real (gitignored) dataset.
-        write2(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
-            f["data"] = fill(v, GREB.xdim, GREB.ydim); f["dim_names"] = ["lon", "lat"]
+        write2(path, v) = (mkpath(dirname(path)); GREBClimate.jldopen(path, "w") do f
+            f["data"] = fill(v, GREBClimate.xdim, GREBClimate.ydim); f["dim_names"] = ["lon", "lat"]
         end)
-        write3(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
-            f["data"] = fill(v, GREB.xdim, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lon", "lat", "time"]
+        write3(path, v) = (mkpath(dirname(path)); GREBClimate.jldopen(path, "w") do f
+            f["data"] = fill(v, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr); f["dim_names"] = ["lon", "lat", "time"]
         end)
-        write_solar(path, v) = (mkpath(dirname(path)); GREB.jldopen(path, "w") do f
-            f["data"] = fill(v, GREB.ydim, GREB.nstep_yr); f["dim_names"] = ["lat", "time"]
+        write_solar(path, v) = (mkpath(dirname(path)); GREBClimate.jldopen(path, "w") do f
+            f["data"] = fill(v, GREBClimate.ydim, GREBClimate.nstep_yr); f["dim_names"] = ["lat", "time"]
         end)
 
         tmpdir = mktempdir()
@@ -579,10 +579,10 @@ function run_light_tests()
 
             # "files present" branch: add the combined flux-correction file and reload.
             mkpath(joinpath(tmpdir, "climatology"))
-            GREB.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
-                f["Tsurf_flux_correction"] = fill(15.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-                f["vapour_flux_correction"] = fill(16.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-                f["Tocean_flux_correction"] = fill(17.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+            GREBClimate.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
+                f["Tsurf_flux_correction"] = fill(15.0, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
+                f["vapour_flux_correction"] = fill(16.0, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
+                f["Tocean_flux_correction"] = fill(17.0, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
             end
 
             fields = load_greb_jld2!(tmpdir; dataset = :ncep)
@@ -626,10 +626,10 @@ function run_heavy_tests()
         tmpdir = mktempdir()
         try
             mkpath(joinpath(tmpdir, "climatology"))
-            GREB.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
-                f["Tsurf_flux_correction"] = fill(42.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-                f["vapour_flux_correction"] = fill(43.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
-                f["Tocean_flux_correction"] = fill(44.0, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+            GREBClimate.jldopen(joinpath(tmpdir, "climatology", "flux_corrections.jld2"), "w") do f
+                f["Tsurf_flux_correction"] = fill(42.0, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
+                f["vapour_flux_correction"] = fill(43.0, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
+                f["Tocean_flux_correction"] = fill(44.0, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
             end
 
             cfg = create_experiment_config(:full_model)
@@ -666,8 +666,8 @@ function run_heavy_tests()
 
     @testset "qflux_correction! pulls Ts/To/q to climatology; Ta gets no correction (matches Fortran)" begin
         fields = ClimateFields()
-        fields.cap_surf .= GREB.cap_ocean
-        for j in 1:GREB.ydim, i in 1:GREB.xdim
+        fields.cap_surf .= GREBClimate.cap_ocean
+        for j in 1:GREBClimate.ydim, i in 1:GREBClimate.xdim
             fields.Tclim[i, j, :] .= 280.0 + 5.0 * sin(i / 10.0) * cos(j / 8.0)
             fields.Toclim[i, j, :] .= 279.0
             fields.qclim[i, j, :] .= 0.006
@@ -677,12 +677,12 @@ function run_heavy_tests()
         ts = TimeState(1, 1)
         ws = CirculationWorkspace()
 
-        Ts = fill(290.0, GREB.xdim, GREB.ydim)
-        Ta = fill(290.0, GREB.xdim, GREB.ydim)
-        q = fill(0.010, GREB.xdim, GREB.ydim)
-        To = fill(285.0, GREB.xdim, GREB.ydim)
+        Ts = fill(290.0, GREBClimate.xdim, GREBClimate.ydim)
+        Ta = fill(290.0, GREBClimate.xdim, GREBClimate.ydim)
+        q = fill(0.010, GREBClimate.xdim, GREBClimate.ydim)
+        To = fill(285.0, GREBClimate.xdim, GREBClimate.ydim)
 
-        GREB.qflux_correction!(340.0, Ts, Ta, q, To, fields, state, ts, cfg, ws, 1)
+        GREBClimate.qflux_correction!(340.0, Ts, Ta, q, To, fields, state, ts, cfg, ws, 1)
 
         @test any(!=(0.0), fields.TF_correct)
         @test any(!=(0.0), fields.ToF_correct)
@@ -696,7 +696,7 @@ function run_heavy_tests()
         @test q ≈ fields.qclim[:, :, 1]
 
         @test all(isfinite, Ta)
-        @test Ta != fill(290.0, GREB.xdim, GREB.ydim)
+        @test Ta != fill(290.0, GREBClimate.xdim, GREBClimate.ydim)
     end
 
     @testset "greb_model! swaps sw_solar for paleo experiments, restores after" begin
@@ -707,8 +707,8 @@ function run_heavy_tests()
         try
             mkpath(joinpath(tmpdir, "solar_scenarios"))
             distinctive_value = 999.0
-            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_paleo.jld2"), "w") do file
-                file["data"] = fill(distinctive_value, GREB.ydim, GREB.nstep_yr)
+            GREBClimate.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_paleo.jld2"), "w") do file
+                file["data"] = fill(distinctive_value, GREBClimate.ydim, GREBClimate.nstep_yr)
                 file["dim_names"] = ["lat", "time"]
             end
 
@@ -744,7 +744,7 @@ function run_heavy_tests()
         fields = ClimateFields()  # z_topo defaults to 0 everywhere -> land branch never fires
         cfg = PhysicsConfig(experiment = :regional_co2_ocean)
 
-        icmn_ctrl = zeros(Float64, GREB.xdim, GREB.ydim, 12)
+        icmn_ctrl = zeros(Float64, GREBClimate.xdim, GREBClimate.ydim, 12)
         # Cell A: January alone >= 0.5, but the other 11 months are 0 ->
         # annual mean ~0.083, NOT ice under the Fortran-matching rule.
         icmn_ctrl[1, 1, 1] = 1.0
@@ -771,7 +771,7 @@ function run_heavy_tests()
         for sym in direct_dispatch_symbols
             fields = ClimateFields()
             cfg = PhysicsConfig(experiment = sym)
-            icmn_ctrl = zeros(Float64, GREB.xdim, GREB.ydim, 1)
+            icmn_ctrl = zeros(Float64, GREBClimate.xdim, GREBClimate.ydim, 1)
             redirect_stdout(devnull) do
                 init_model!(cfg, fields)
             end
@@ -793,7 +793,7 @@ function run_heavy_tests()
         try
             mkpath(joinpath(tmpdir_rcp, "scenario"))
             expected_rcp_co2 = Dict(:rcp26 => 400.0, :rcp45 => 401.0, :rcp60 => 402.0)
-            GREB.jldopen(joinpath(tmpdir_rcp, "scenario", "ipcc_scenarios.jld2"), "w") do file
+            GREBClimate.jldopen(joinpath(tmpdir_rcp, "scenario", "ipcc_scenarios.jld2"), "w") do file
                 file["scenarios"] = Dict(
                     "rcp26" => Dict(1950 => expected_rcp_co2[:rcp26]),
                     "rcp45" => Dict(1950 => expected_rcp_co2[:rcp45]),
@@ -856,7 +856,7 @@ function run_heavy_tests()
                 :ssp119 => 300.0, :ssp126 => 301.0, :ssp245 => 302.0,
                 :ssp460 => 303.0, :ssp585 => 304.0,
             )
-            GREB.jldopen(joinpath(tmpdir_ssp, "scenario", "ipcc_scenarios.jld2"), "w") do file
+            GREBClimate.jldopen(joinpath(tmpdir_ssp, "scenario", "ipcc_scenarios.jld2"), "w") do file
                 file["scenarios"] = Dict(string(sym) => Dict(1950 => co2) for (sym, co2) in expected_co2)
             end
 
@@ -881,7 +881,7 @@ function run_heavy_tests()
         tmpdir_hist = mktempdir()
         try
             mkpath(joinpath(tmpdir_hist, "scenario"))
-            GREB.jldopen(joinpath(tmpdir_hist, "scenario", "ipcc_scenarios.jld2"), "w") do file
+            GREBClimate.jldopen(joinpath(tmpdir_hist, "scenario", "ipcc_scenarios.jld2"), "w") do file
                 file["scenarios"] = Dict("hist" => Dict(1850 => 280.73))
             end
 
@@ -901,17 +901,17 @@ function run_heavy_tests()
         tmpdir = mktempdir()
         try
             mkpath(joinpath(tmpdir, "solar_scenarios"))
-            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_paleo.jld2"), "w") do file
-                file["data"] = fill(999.0, GREB.ydim, GREB.nstep_yr)
+            GREBClimate.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_paleo.jld2"), "w") do file
+                file["data"] = fill(999.0, GREBClimate.ydim, GREBClimate.nstep_yr)
                 file["dim_names"] = ["lat", "time"]
             end
-            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_obliquity.jld2"), "w") do file
-                file["data"] = fill(999.0, 1, GREB.ydim, GREB.nstep_yr)
+            GREBClimate.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_obliquity.jld2"), "w") do file
+                file["data"] = fill(999.0, 1, GREBClimate.ydim, GREBClimate.nstep_yr)
                 file["dim_names"] = ["index", "lat", "time"]
                 file["coords"] = Dict(1 => [0.0])
             end
-            GREB.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_eccentricity.jld2"), "w") do file
-                file["data"] = fill(999.0, 1, GREB.ydim, GREB.nstep_yr)
+            GREBClimate.jldopen(joinpath(tmpdir, "solar_scenarios", "solar_eccentricity.jld2"), "w") do file
+                file["data"] = fill(999.0, 1, GREBClimate.ydim, GREBClimate.nstep_yr)
                 file["dim_names"] = ["index", "lat", "time"]
                 file["coords"] = Dict(1 => [0.0])
             end
@@ -933,8 +933,8 @@ function run_heavy_tests()
         try
             clim_dir = joinpath(tmpdir_anom, "climatology")
             mkpath(clim_dir)
-            write_field(name, value) = GREB.jldopen(joinpath(clim_dir, name), "w") do file
-                file["data"] = fill(value, GREB.xdim, GREB.ydim, GREB.nstep_yr)
+            write_field(name, value) = GREBClimate.jldopen(joinpath(clim_dir, name), "w") do file
+                file["data"] = fill(value, GREBClimate.xdim, GREBClimate.ydim, GREBClimate.nstep_yr)
                 file["dim_names"] = ["lon", "lat", "time"]
             end
 
@@ -1080,7 +1080,7 @@ function run_heavy_tests()
 end
 
 shard = get(ENV, "GREB_TEST_SHARD", "all")
-@testset "GREB.jl" begin
+@testset "GREBClimate.jl" begin
     shard in ("all", "light") && run_light_tests()
     shard in ("all", "heavy") && run_heavy_tests()
 end

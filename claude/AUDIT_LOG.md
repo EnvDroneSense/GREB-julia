@@ -1,4 +1,4 @@
-# GREB.jl — Audit Log
+# GREBClimate.jl — Audit Log
 
 Forensic, pass-by-pass companion to [`IMPROVEMENTS.md`](IMPROVEMENTS.md). That
 document tracks the *current* state of the code; this one is an append-only

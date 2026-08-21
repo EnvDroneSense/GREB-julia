@@ -1,6 +1,6 @@
 # =============================================================================
 # run_greb.jl — plain-Julia driver reproducing the GREB_julia.jl notebook flow
-# on top of the extracted `GREB` package (no Pluto / no @bind widgets).
+# on top of the extracted `GREBClimate` package (no Pluto / no @bind widgets).
 #
 # Mirrors the notebook's non-interactive path:
 #   1. load JLD2 input data        (notebook data-loading cell)
@@ -18,7 +18,7 @@
 # never calls `exit()`, so `include`-ing it from a REPL will not kill the session.
 # =============================================================================
 
-using GREB
+using GREBClimate
 using Statistics
 
 """

@@ -2,22 +2,23 @@
 
 [![Julia](https://img.shields.io/badge/Julia-1.10+-9558B2?logo=julia)](https://julialang.org/)
 [![Pluto](https://img.shields.io/badge/Pluto-Interactive-purple)](https://github.com/fonsp/Pluto.jl)
-[![docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://EnvDroneSense.github.io/GREB-julia/)
+[![docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://EnvDroneSense.github.io/GREBClimate.jl/)
 
 A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. This implementation runs in an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook with process isolation capabilities for decomposition experiments.
 
 ---
-> **Repository layout:** GREB is now organized as a standard Julia package.
-> The model code lives under `src/` (a `module GREB`, originally extracted
-> **verbatim** from the notebook and since split into topical files - see
-> `src/GREB.jl` for the include order), tests in `test/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+> **Repository layout:** GREB is now organized as a standard Julia package,
+> `GREBClimate.jl`. The model code lives under `src/` (a `module GREBClimate`,
+> originally extracted **verbatim** from the notebook and since split into
+> topical files - see `src/GREBClimate.jl` for the include order), tests in
+> `test/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREBClimate.jl/)
 > site in `docs/`, a plain-Julia driver in `examples/run_greb.jl`, and the
 > original interactive Pluto notebook - unchanged - in `notebooks/GREB_julia.jl`.
 > See [Project Structure](#project-structure) for the full layout.
 >
 > ```julia
 > julia --project=.                 # activate the package env
-> using GREB
+> using GREBClimate
 > cfg = create_experiment_config(:full_model)
 > load_greb_jld2!("greb_dataset_jld2"; dataset=:ncep)
 > result = greb_model!(RunSpec(), cfg)   # flux=0, ctrl=1, scnr=1 years
@@ -71,15 +72,15 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 Requires **Julia 1.10** (the current LTS) or later. Download from [julialang.org](https://julialang.org/downloads/).
 
 ```bash
-git clone https://github.com/EnvDroneSense/GREB-julia
-cd GREB-julia
+git clone https://github.com/EnvDroneSense/GREBClimate.jl
+cd GREBClimate.jl
 ```
 
 ### Installation
 
-GREB is not yet registered in the Julia General Registry — once it is,
-`Pkg.add("GREB")` will work directly. Until then, install from the git
-clone above:
+GREBClimate is not yet registered in the Julia General Registry — once it
+is, `Pkg.add("GREBClimate")` will work directly. Until then, install from
+the git clone above:
 
 ```julia
 using Pkg
@@ -96,7 +97,7 @@ This installs all dependencies from `Project.toml`:
 | `PrecompileTools` | Precompiles hot kernels at build time (faster first run) |
 
 The Pluto notebook environment (`notebooks/`) separately depends on `PlutoUI`
-for its interactive controls. The [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+for its interactive controls. The [Documenter.jl](https://EnvDroneSense.github.io/GREBClimate.jl/)
 site under `docs/` has its own environment too.
 
 ### Launch Pluto (optional)
@@ -214,7 +215,7 @@ result.scnr    # Vector{MonthlyRecord} (scenario)
 Each `MonthlyRecord` is a `NamedTuple` of `(xdim, ydim)` `Matrix{Float32}` fields:
 `Ts, Ta, To, q, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens`
 
-See the [Tutorial](https://EnvDroneSense.github.io/GREB-julia/tutorial/) or
+See the [Tutorial](https://EnvDroneSense.github.io/GREBClimate.jl/tutorial/) or
 [`examples/run_greb.jl`](examples/run_greb.jl) for the full runnable version
 of the above, including a global-mean summary and an optional plot.
 
@@ -239,9 +240,9 @@ Toggle the **Execute Model** checkbox to run; results land in `last_run`
 ## 📁 Project Structure
 
 ```
-GREB-julia/
-├── src/                        # the GREB package (module GREB)
-│   ├── GREB.jl                 # module shell + include order
+GREBClimate.jl/
+├── src/                        # the GREBClimate package (module GREBClimate)
+│   ├── GREBClimate.jl          # module shell + include order
 │   ├── constants.jl            # grid/physical constants
 │   ├── config.jl               # PhysicsConfig, RunSpec, experiment presets
 │   ├── state.jl                # ClimateFields, ModelState, workspaces
@@ -257,7 +258,8 @@ GREB-julia/
 ├── examples/run_greb.jl        # plain-Julia driver (no Pluto)
 ├── notebooks/GREB_julia.jl     # original interactive Pluto notebook (unchanged)
 ├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter
-└── claude/                     # dev notes: IMPROVEMENTS.md (current state), CHANGELOG.md (audit trail)
+├── CHANGELOG.md                # user-facing changelog
+└── claude/                     # dev notes: IMPROVEMENTS.md (current state), AUDIT_LOG.md (forensic audit trail)
 ```
 
 ## 🔬 Key Model Components
@@ -300,8 +302,8 @@ Contributions to fix these issues are welcome! Open a pull request or an issue o
 
 - **NetCDF output** - optional direct‑write of monthly means 
 - **Visualisation dashboard** - embedded interactive maps and time series (similar to the [interactive database](https://mscm.dkrz.de/GREB_model.html?locale=EN) )
-- **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREB-julia/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
-- **Package registration** - formally register GREB.jl with the Julia General Registry for easy installation
+- **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREBClimate.jl/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
+- **Package registration** - formally register GREBClimate.jl with the Julia General Registry for easy installation
 
 ---
 ## 📚 References

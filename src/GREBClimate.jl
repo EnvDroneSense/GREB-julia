@@ -1,4 +1,4 @@
-module GREB
+module GREBClimate
 
 # =============================================================================
 # GREB — Globally Resolved Energy Balance model
@@ -59,4 +59,4 @@ using Logging: with_logger, NullLogger
     end
 end
 
-end # module GREB
+end # module GREBClimate
