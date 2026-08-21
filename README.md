@@ -101,6 +101,7 @@ This installs all dependencies from `Project.toml`:
 | Package | Purpose |
 |:--------|:--------|
 | `JLD2` | Reading/writing the model's `.jld2` input data |
+| `DataDeps` | Fetching and caching the input dataset on first use |
 | `LoopVectorization` | SIMD performance |
 | `PrecompileTools` | Precompiles hot kernels at build time (faster first run) |
 
@@ -126,30 +127,48 @@ The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/J
 
 ### Getting the data
 
-The dataset is ~580 MB, so it is **not** committed to the repository
-(`greb_input_data/` is gitignored). Request the prepared `.jld2` bundle from
-the maintainers, unpack it anywhere on disk, and point the model at that
-directory:
+The dataset is ~439 MB unpacked, so it is **not** committed to the repository
+(`greb_input_data/` is gitignored). It is fetched on demand via
+[DataDeps.jl](https://github.com/oxinabox/DataDeps.jl):
 
 ```julia
-fields = load_greb_jld2!("/path/to/greb_input_data"; dataset=:ncep)
+using GREBClimate
+dir    = greb_data_dir()        # prompts, downloads (~353 MB) and caches on first use
+fields = load_greb_jld2!(dir; dataset=:ncep)
 ```
 
-Every entry point takes the directory as an argument, so it does not have to
-live inside the repository. `examples/run_greb.jl` additionally reads the
-`GREB_DATA` environment variable, which is the least repetitive option if you
-run the model often:
+`greb_data_dir()` resolves in this order, and only the last step touches the
+network:
+
+| | Source |
+|--:|:-------|
+| 1 | an explicit path — `greb_data_dir("/path/to/greb_input_data")` |
+| 2 | `$GREB_DATA` |
+| 3 | `greb_input_data/` beside the repository |
+| 4 | the `GREB-input-data` DataDep — downloaded and cached |
+
+So if you already have the dataset, nothing is downloaded. Point at it directly,
+or set the environment variable once:
 
 ```bash
 export GREB_DATA=/path/to/greb_input_data
 julia --project=. examples/run_greb.jl
 ```
 
-> **Planned:** distribution via [DataDeps.jl](https://github.com/oxinabox/DataDeps.jl),
-> so `using GREBClimate` fetches and caches the `.jld2` bundle on first use and
-> the manual download step disappears. Not yet implemented - the manual path
-> above is the current one. Tracked in
-> [`.claude/notes/data-distribution.md`](.claude/notes/data-distribution.md).
+The download is verified against a recorded SHA256 and cached under
+`~/.julia/scratchspaces/.../datadeps/GREB-input-data`, so it happens once per
+machine rather than once per project.
+
+Two environment variables are worth knowing:
+
+| Variable | Effect |
+|:---------|:-------|
+| `DATADEPS_ALWAYS_ACCEPT=true` | Skip the download prompt. **Required** in CI or any non-interactive session, which otherwise blocks waiting on stdin. |
+| `DATADEPS_DISABLE_DOWNLOAD=true` | Make a would-be download throw instead. Useful on metered connections. |
+
+Running the tests or the benchmarks never downloads anything — both resolve with
+`allow_download=false` and skip data-dependent work when no local dataset is
+found.
 
 ### Regenerating the data from raw `.bin` files (maintainers)
 
@@ -159,9 +178,21 @@ several upstream sources and are not redistributed here;
 [DATA_README.md](DATA_README.md) documents the files and their layout.
 
 ```bash
-julia --project=. scripts/convert_greb_to_jld2.jl <input_dir> [output_dir]
+julia --project=. tools/convert_greb_to_jld2.jl <input_dir> [output_dir]
 # output_dir defaults to greb_input_data/
 ```
+
+To publish a regenerated dataset, build the distributable archive and its
+checksum, then attach it to the `data-v1` release:
+
+```bash
+julia --project=. tools/package_dataset.jl greb_input_data greb_input_data-v1.tar.gz
+```
+
+That script validates the tree against the converter's allowlist first (so a
+stray field cannot silently enlarge every user's download), builds a
+reproducible `tar.gz`, and prints the SHA256 to paste into `DATA_SHA256` in
+[`src/data.jl`](src/data.jl).
 
 ### Directory Structure
 
@@ -193,8 +224,8 @@ greb_input_data/
     ├── ipcc_scenarios.jld2        # Dict{String,Dict{Int,Float64}}, keyed "rcp85"/"ssp585"/"hist"/...
     │                              # ("hist" backs :historical_co2, which starts at year 1850 not 1950)
     └── historical_emissions_population.jld2   # year => (co2_emissions_gt_co2_yr, population_billions)
-                                    # not read by the model itself — used by tests and
-                                    # available for analysis scripts
+                                    # written by the converter; not read by the model
+                                    # or the tests. Kept for analysis use (11 KB).
 ```
 
 ### Loading Data
@@ -310,6 +341,7 @@ GREBClimate.jl/
 │   ├── constants.jl            # grid/physical constants
 │   ├── config.jl               # PhysicsConfig, RunSpec, experiment presets
 │   ├── state.jl                # ClimateFields, ModelState, workspaces
+│   ├── data.jl                 # greb_data_dir(): dataset location + DataDep
 │   ├── io.jl                   # JLD2 loaders
 │   ├── physics/                # radiation.jl, hydrology.jl, ocean.jl
 │   ├── circulation.jl          # diffusion/advection/convergence
@@ -325,10 +357,11 @@ GREBClimate.jl/
 │   ├── GREB_julia.jl           # interactive Pluto notebook (own Project.toml)
 │   ├── PultoUI.jl              # work-in-progress UI experiments — not wired up
 │   └── launch_pluto.jl         # convenience launcher
-├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter (maintainers only)
+├── tools/
+│   ├── convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter (maintainers only)
+│   └── package_dataset.jl       # build the published dataset archive + SHA256
 ├── DATA_README.md              # raw .bin input inventory (maintainers only)
 ├── CHANGELOG.md                # user-facing changelog
-├── archive/                    # pre-package snapshot of the notebook, kept for diffing
 └── .claude/                    # agent-facing material, not needed to use the package
     ├── skills/                 # task playbooks (benchmarking, docs checks, dev notes)
     └── notes/                  # dev notes, one file per investigation — see INDEX.md

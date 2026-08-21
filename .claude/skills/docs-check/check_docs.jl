@@ -107,7 +107,7 @@ let datadir = joinpath(ROOT, "greb_input_data")
         ok("skipped - greb_input_data/ not present")
     else
         code = String[]
-        for dir in ["src", "test", "benchmark", "examples", "scripts"]
+        for dir in ["src", "test", "benchmark", "examples", "tools"]
             d = joinpath(ROOT, dir)
             isdir(d) || continue
             for (r, _, fs) in walkdir(d), f in fs

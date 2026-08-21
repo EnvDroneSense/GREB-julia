@@ -22,7 +22,7 @@ itself.
 
 What's missing is the other half — an automated way for a `Pkg.add("GREB")`
 user to actually *get* the data. Today it's "ask the maintainer, or
-regenerate from raw `.bin` files via `scripts/convert_greb_to_jld2.jl`"
+regenerate from raw `.bin` files via `tools/convert_greb_to_jld2.jl`"
 (README's Input Data section). There is no `Artifacts.toml` and no
 `artifact"..."` usage anywhere in the repo — every loader in `src/io.jl`
 (`load_greb_jld2!`, `load_cc_anomaly_jld2!`, `load_solar_forcing_jld2`,

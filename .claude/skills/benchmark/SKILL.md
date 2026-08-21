@@ -13,12 +13,13 @@ all against the real dataset, post-JIT-warmup:
 | `year` (default) | Wall-clock time for a real 1-simulated-year `:full_model` control run. |
 | `stages` | Per-timestep breakdown: times each of `tendencies!`'s stages (`circulation!` for `Ta`/`q`, `SWradiation!`, `LWradiation!`, `hydro!`, `deep_ocean!`) individually and reports each one's share of the total. |
 | `threads` | Runs `year` in separate `-t N` subprocesses (thread count is fixed at Julia startup) and reports relative speedup vs. `-t 1`. |
-| `alloc` | Reports bytes allocated by one `tendencies!` call - a regression guard for the zero-allocation hot path. |
+| `alloc` | Reports bytes allocated by one `tendencies!` call - a regression guard for the zero-allocation hot path. Currently **0 bytes**. |
 
 The model runs natively in `Float32` throughout (climatology, workspace
 buffers, model state - see `.claude/notes/performance.md` §2.3); current baseline
-on this machine is **~0.65-0.75s/simulated year at `-t 2`** (down from the
-pre-`Float32` ~1.1-1.2s/year). Treat any reading far outside that band as
+on this machine is **~0.6-0.75s/simulated year at `-t 2`** (down from the
+pre-`Float32` ~1.1-1.2s/year); a 2026-08-21 run measured 0.63s mean
+(0.56-0.71s across 3 reps). Treat any reading far outside that band as
 worth double-checking against the noise sources below before reporting it
 as a real regression.
 
@@ -83,10 +84,19 @@ low-variance choice.
    circulation), so the third lane `-t 3` used to justify is nearly free -
    `-t 2` already captures almost all the real parallelism via work-stealing
    once the tiny synchronous "rest" finishes. Measured across 5 independent
-   `threads` sweeps: `-t 2` gave a consistent ~1.5× (range 1.24-1.62×,
-   *low* variance - always a clear win); `-t 3`/`-t 4` ranged anywhere from
-   ~1.0× (barely better than serial) to ~1.65× (occasionally best) - *high*
-   variance, no longer a dependable edge over `-t 2`. Don't take one
+   `threads` sweeps (2026-08-13): `-t 2` gave ~1.5× (range 1.24-1.62×, *low*
+   variance - always a clear win); `-t 3`/`-t 4` ranged anywhere from ~1.0×
+   (barely better than serial) to ~1.65× (occasionally best) - *high*
+   variance, no longer a dependable edge over `-t 2`.
+
+   **Re-measured 2026-08-21 (3 sweeps): `-t 2` averaged 1.31× (range
+   1.14-1.54×) - the conclusion holds, but the older "consistent ~1.5×, low
+   variance" figure is optimistic.** `-t 3` averaged 1.21× (1.08-1.31×) and
+   `-t 4` 1.22× (1.02-1.47×), so `-t 2` remains both the fastest and the
+   least erratic choice. `-t 1` was rock-stable across all three sweeps
+   (1.003/1.018/1.024s), which puts the variance squarely in the threaded
+   paths rather than in general machine noise - expect a wide spread at
+   `-t 2`+ and average several sweeps before calling anything a regression. Don't take one
    `threads` run as settling a `-t 2` vs `-t 3` question either way -
    `-t 3`/`-t 4` are the ones sensitive enough to background load
    (OneDrive/SearchIndexer, see below) to flip either direction; run it a
@@ -120,6 +130,13 @@ low-variance choice.
   mixes in dataset loading and every other stage's noise. This is how every
   number in `.claude/notes/performance.md` §2.3/§2.15 was actually produced before
   being confirmed against the real `year`/`stages` numbers here.
+- **Threaded-vs-serial equivalence** is covered by a test, not just by
+  benchmarking: `test/runtests.jl`'s "threaded circulation matches serial"
+  testset spawns `-t 1` and `-t 2` subprocesses and asserts bit-identical
+  monthly means. Run the heavy shard after touching `tendencies!`'s
+  parallel branch or either `circulation!` call. Note `Pkg.test()` alone is
+  single-threaded, so that subprocess pair is the only thing exercising the
+  `Threads.@spawn` path locally; CI sets `JULIA_NUM_THREADS=2` as well.
 - **Numeric regression alongside any timing change**: a faster wrong answer
   is not a win. Pair any timing comparison with a correctness check -
   `test/runtests.jl`'s golden-regression test, or a direct diff against a

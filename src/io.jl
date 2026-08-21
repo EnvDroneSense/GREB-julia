@@ -1,7 +1,7 @@
 """
     read_jld2(filepath::String)
 
-Read a `.jld2` field file written by `scripts/convert_greb_to_jld2.jl`.
+Read a `.jld2` field file written by `tools/convert_greb_to_jld2.jl`.
 
 # Returns
 - named tuple `(data, dim_names, coords, ctl)` where:
@@ -67,7 +67,7 @@ Loads a `year => CO2` (ppm-equivalent) lookup table for an IPCC scenario
 function load_co2_scenario_jld2(jld2_dir::String, scenario::Symbol)
     filepath = joinpath(jld2_dir, "scenario", "ipcc_scenarios.jld2")
     isfile(filepath) ||
-        error("Scenario file not found: $filepath (run scripts/convert_greb_to_jld2.jl)")
+        error("Scenario file not found: $filepath (run tools/convert_greb_to_jld2.jl)")
     scenarios = jldopen(filepath, "r") do file
         file["scenarios"]
     end
@@ -133,7 +133,7 @@ end
 function _load_anomaly_field!(climatology_dir::String, filename::String, target::AbstractArray)
     filepath = joinpath(climatology_dir, filename)
     isfile(filepath) ||
-        error("Anomaly forcing file not found: $filepath (run scripts/convert_greb_to_jld2.jl)")
+        error("Anomaly forcing file not found: $filepath (run tools/convert_greb_to_jld2.jl)")
     target .= read_jld2(filepath).data
 end
 

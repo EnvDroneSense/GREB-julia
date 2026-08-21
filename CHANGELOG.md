@@ -16,12 +16,23 @@ was found, how it was verified against the Fortran reference - see
   characters).
 
 ### Added
+- **Automatic dataset download.** The JLD2 input dataset is now fetched and
+  cached on first use via [DataDeps.jl](https://github.com/oxinabox/DataDeps.jl).
+  The new exported `greb_data_dir()` resolves an explicit path, then
+  `$GREB_DATA`, then a local `greb_input_data/`, and only then downloads - so
+  existing setups keep working untouched and offline use is unaffected. Pass
+  `allow_download=false` to stop before the network; the test suite and the
+  benchmarks do exactly that, so neither can pull 353 MB as a side effect.
+  Set `DATADEPS_ALWAYS_ACCEPT=true` for non-interactive sessions.
+- `tools/package_dataset.jl` builds the published dataset archive
+  reproducibly and prints its SHA256, validating the tree against the
+  converter's allowlist first so a stray field cannot enlarge the download.
 - `greb_model!` now refuses an uninitialized `ClimateFields` (all-zero
   climatology) rather than silently simulating a physically meaningless
   ~-40 °C world. `ClimateFields` carries a `loaded` flag set by
   `load_greb_jld2!`; genuinely data-free runs - package precompilation and
   config/scenario-plumbing tests - opt in with `allow_uninitialized=true`.
-- `scripts/convert_greb_to_jld2.jl` filters on an explicit `MODEL_FIELD_NAMES`
+- `tools/convert_greb_to_jld2.jl` filters on an explicit `MODEL_FIELD_NAMES`
   allowlist, so it no longer emits 11 `.jld2` files (~148 MB) that nothing
   reads. `--all` restores the previous convert-everything behaviour. A test
   asserts the allowlist and `src/io.jl`'s loads agree in both directions.
@@ -43,6 +54,12 @@ was found, how it was verified against the Fortran reference - see
   precision.
 
 ### Fixed
+- **The multithreaded circulation path was never tested.** `tendencies!` runs
+  `circulation!(Ta)`/`circulation!(q)` concurrently only when
+  `Threads.nthreads() > 1`, and the test process was single-threaded, so that
+  branch had only ever been validated by benchmarking. A heavy-shard test now
+  spawns `-t 1` and `-t 2` subprocesses and asserts bit-identical monthly
+  means, and CI sets `JULIA_NUM_THREADS=2`.
 - **README quick-start produced wrong results.** The documented first run
   called `load_greb_jld2!` and discarded its return value, so the model ran on
   a zero climatology and reported a global-mean surface temperature of
@@ -50,7 +67,7 @@ was found, how it was verified against the Fortran reference - see
   `✅ All GREB data loaded successfully` and passing `all(isfinite, Ts)`. The
   snippet now threads `fields` through, and the API refuses the mistake.
 - A second instance of the same pattern in README §Loading Data.
-- `scripts/convert_greb_to_jld2.jl` defaulted its input directory to
+- `tools/convert_greb_to_jld2.jl` defaulted its input directory to
   `Data/input`, which does not exist - the layout is flat `Data/` plus
   `Data/solar_forcing_scenarios/` - so the documented no-argument invocation
   always failed. Corrected, with an actionable error when the directory is
@@ -84,6 +101,11 @@ detailed in `.claude/notes/audit-history.md`.
   a single `flux_corrections.jld2` - ~35% faster to load, no size penalty.
 
 ### Changed
+- The dataset shrank from 580 MB / 49 files to **439 MB / 39 files**: 11 files
+  that no code reads were removed, mostly CMIP5 `.new` variants of fields the
+  model reads in their non-`.new` form. The official MSCM Fortran GREB opens
+  the non-`.new` names, so this changes no results; see
+  `.claude/notes/data-distribution.md`.
 - User-facing data documentation now describes obtaining the prepared `.jld2`
   bundle. `DATA_README.md` and the `.bin` converter are labelled as maintainer
   tooling, which is what they are - the raw inputs are collated from several

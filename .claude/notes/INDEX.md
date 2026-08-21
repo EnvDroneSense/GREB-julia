@@ -20,6 +20,7 @@ conventions when adding to these.
 | [`performance.md`](performance.md) | Every optimization pass: threading, `Float32`, `@turbo` — what was measured, what was rejected. The largest note. |
 | [`testing-tooling.md`](testing-tooling.md) | Test suite, CI, reproducibility tooling. |
 | [`fortran-validation.md`](fortran-validation.md) | Switch/experiment behaviour validated against the original Fortran GREB. |
+| [`datadeps-context.md`](datadeps-context.md) | DataDeps distribution: what was measured, what was built, and the two prerequisites still outstanding (release asset, licence review). |
 | [`onboarding.md`](onboarding.md) | 2026-08-21 usability review: the silent −40 °C README bug and the doc-accuracy fixes it triggered. |
 
 ## Investigated — findings recorded, no change made
@@ -41,7 +42,7 @@ conventions when adding to these.
 | Note | What it covers |
 |:-----|:---------------|
 | [`planned.md`](planned.md) | Next steps not yet begun. |
-| [`data-distribution.md`](data-distribution.md) | DataDeps distribution (planned). Also holds the JLD2 dataset audit — 11 dead files, 148 MB — and the resolved `.new` CMIP5 question. |
+| [`data-distribution.md`](data-distribution.md) | The JLD2 dataset audit: 11 dead files removed (141 MB), and the resolved `.new` CMIP5 question. |
 
 ---
 

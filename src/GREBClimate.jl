@@ -1,7 +1,7 @@
 module GREBClimate
 
 # =============================================================================
-# GREB — Globally Resolved Energy Balance model
+# GREB - Globally Resolved Energy Balance model
 #
 # A global climate model that steps surface/air/ocean temperature and
 # humidity forward under shortwave/longwave radiation, hydrology, sea ice,
@@ -10,16 +10,18 @@ module GREBClimate
 # lives in `notebooks/GREB_julia.jl`; see the package docs or README for
 # usage.
 #
-# Files below are included in dependency order: constants → config → state
-# → io → physics/{radiation,hydrology,ocean} → circulation → tendencies →
-# output → postprocess → model.
+# Files below are included in dependency order: constants → config → data
+# → state → io → physics/{radiation,hydrology,ocean} → circulation →
+# tendencies → output → postprocess → model.
 # =============================================================================
 
 using LoopVectorization   # @turbo SIMD
 using JLD2
+using DataDeps: DataDeps, DataDep, register, unpack, @datadep_str
 
 export PhysicsConfig, RunSpec, CirculationWorkspace, MonthlyAccumulator, TimeState, MonthlyRecord
 export ClimateFields, ModelState, SurfaceState
+export greb_data_dir
 export read_jld2, load_solar_forcing_jld2, load_flux_corrections_jld2!, load_greb_jld2!
 export load_co2_scenario_jld2, load_custom_co2_scenario, load_cc_anomaly_jld2!, load_enso_anomaly_jld2!
 export create_experiment_config, set_hydrology_parameters!, init_model!
@@ -32,6 +34,7 @@ export xdim, ydim, nstep_yr
 
 include("constants.jl")
 include("config.jl")
+include("data.jl")
 include("state.jl")
 include("io.jl")
 include("physics/radiation.jl")
@@ -42,6 +45,13 @@ include("tendencies.jl")
 include("output.jl")
 include("postprocess.jl")
 include("model.jl")
+
+function __init__()
+    # Registration only: nothing is downloaded until `greb_data_dir()` has to
+    # fall through to the DataDep, which cannot happen during precompilation.
+    register_greb_datadep()
+    return nothing
+end
 
 using PrecompileTools: @compile_workload
 using Logging: with_logger, NullLogger

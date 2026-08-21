@@ -651,7 +651,7 @@ reverted after judging the Fortran value itself wasn't worth copying.
   by analogy only): measured the real 3 files directly first (19.89ms vs.
   30.78ms, ~35% faster, no size penalty), then implemented
   `convert_flux_corrections`/`FLUX_CORRECTION_NAMES` in
-  `scripts/convert_greb_to_jld2.jl` and rewrote `load_flux_corrections_jld2!`
+  `tools/convert_greb_to_jld2.jl` and rewrote `load_flux_corrections_jld2!`
   (`src/io.jl`) to read the combined `flux_corrections.jld2`; updated
   `test/runtests.jl`'s synthetic-dataset test and both `README.md`/
   `DATA_README.md` to match. Full suite re-run clean: 319/319 pass.

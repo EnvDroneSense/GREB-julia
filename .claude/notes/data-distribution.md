@@ -40,7 +40,7 @@ Audited all 49 `.jld2` files in `greb_input_data/` (580 MB).
 **No byte-identical duplicates.** All 49 files md5-hash uniquely.
 
 **11 files (148 MB, ~25% of the dataset) are read by nothing** — not `src/`,
-`test/`, `benchmark/`, `examples/`, `scripts/`, or the Pluto notebook:
+`test/`, `benchmark/`, `examples/`, `tools/`, or the Pluto notebook:
 
 ```
 cmip5.evaporation.rcp85.ensmean.forcing.jld2          cmip5.omegastd.rcp85.ensmean.forcing.new.jld2
@@ -51,7 +51,7 @@ cmip5.omega.rcp85.ensmean.forcing.nomean.new.jld2     cmip5.windspeed.rcp85.ensm
                                                       cmip5.zonal.wind.rcp85.ensmean.forcing.new.jld2
 ```
 
-**Root cause:** `scripts/convert_greb_to_jld2.jl` converts indiscriminately —
+**Root cause:** `tools/convert_greb_to_jld2.jl` converts indiscriminately —
 `filter(endswith(".bin"), readdir(input_path))`. Every `.bin` present in the
 input directory becomes a `.jld2`, whether the model reads it or not.
 
@@ -113,7 +113,7 @@ change, not a fix.
 
 Both follow-ups were blocked on the `.new` question and landed once it closed.
 
-- `scripts/convert_greb_to_jld2.jl` now filters on an explicit
+- `tools/convert_greb_to_jld2.jl` now filters on an explicit
   `MODEL_FIELD_NAMES` allowlist (33 entries) instead of globbing every `.bin`.
   Against the real `Data/` directory it keeps 33 and skips exactly the 11 dead
   files, and warns if an allowlisted field is absent from the input. `--all`
@@ -126,10 +126,38 @@ Both follow-ups were blocked on the `.new` question and landed once it closed.
 - `.claude/skills/docs-check/check_docs.jl` reports unreferenced `.jld2` files
   as a NOTE, so the situation stays visible without failing CI.
 
-## Not done: deleting the 11 dead files
+## Bundle contents as of 2026-08-21
 
-Left alone deliberately — deleting from a 580 MB local dataset is the
-maintainer's call, not a cleanup to do silently. They cost 148 MB and nothing
-reads them; regenerating the bundle with the new allowlist simply won't emit
-them. Keeping the `.new` files somewhere out-of-band has some value as a record
-of the variant that was evaluated and rejected.
+After removing the 11 unreferenced files: **39 files, 439 MB** (down from 49 /
+580 MB).
+
+| Subdirectory | Files | Size |
+|:-------------|------:|-----:|
+| `climatology/` | 31 | 424 MB |
+| `solar_scenarios/` | 3 | 15 MB |
+| `static/` | 2 | <1 MB |
+| `solar/` | 1 | <1 MB |
+| `scenario/` | 2 | <1 MB |
+
+`climatology/` is 97% of the payload, so any split-bundle scheme has to divide
+*that*, not the top-level directories.
+
+One file is written by the converter but read by nothing — `scenario/historical_emissions_population.jld2`
+(11 KB, CO2 emissions and population by year). Retained deliberately for
+analysis use; too small to matter either way. Note an earlier revision of
+`README.md` claimed the tests used it — they do not.
+
+## Done: the 11 dead files removed (2026-08-21)
+
+Removed from `greb_input_data/`, freeing **141 MB** (580 MB -> 439 MB, 49 -> 39
+files). Authorized by the maintainer, who holds a separate backup of the `.new`
+data.
+
+Reversible regardless: every one of the 11 still has its source `.bin` in
+`Data/`, so `julia --project=. tools/convert_greb_to_jld2.jl Data <out> --all`
+regenerates them.
+
+Two of the 11 were **not** `.new` variants and so may not be covered by that
+backup - `cmip5.evaporation.rcp85.ensmean.forcing.jld2` and
+`cmip5.omegastd.rcp85.ensmean.vertmean.forcing.jld2`. Both are regenerable from
+`Data/` as above; neither is read by any code.

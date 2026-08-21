@@ -9,14 +9,16 @@ result.
 ```julia
 using GREBClimate
 
-jld2_dir = "greb_input_data"   # wherever you unpacked the .jld2 bundle
+jld2_dir = greb_data_dir()                            # see below
 fields = load_greb_jld2!(jld2_dir; dataset = :ncep)   # or :era
 ```
 
-The dataset is not shipped with the package (~580 MB) - see
-[Input data](@ref) for how to obtain it. `jld2_dir` can be any path;
-`examples/run_greb.jl` also reads it from the `GREB_DATA` environment
-variable.
+[`greb_data_dir`](@ref) returns the dataset directory, downloading and caching
+it (~353 MB) on first use if no local copy is found. It checks an explicit path,
+then `$GREB_DATA`, then `greb_input_data/` beside the package, and only then the
+network - so if you already have the data, nothing is fetched. Pass a path
+directly if you prefer: `greb_data_dir("/path/to/greb_input_data")`, or hand
+`load_greb_jld2!` the path itself. See [Input data](@ref).
 
 `fields` is a [`ClimateFields`](@ref) - climatology, grid geometry, flux
 corrections, and the regional-CO₂ mask/solar table. Every physics function

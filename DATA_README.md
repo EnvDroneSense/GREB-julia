@@ -13,7 +13,7 @@
 Once the raw files are in place, produce the `.jld2` dataset with:
 
 ```bash
-julia --project=. scripts/convert_greb_to_jld2.jl <input_dir> [output_dir]
+julia --project=. tools/convert_greb_to_jld2.jl <input_dir> [output_dir]
 # output_dir defaults to greb_input_data/
 ```
 
@@ -100,7 +100,7 @@ Text files containing time series of forcing values. Each `ipcc.scenario.*.txt`
 file is whitespace-separated, one row per year, no header: `year CO2` (ppm,
 GREB's simplified CO2-forcing index - not literal atmospheric ppm for the RCP
 files) - extra trailing columns (as in the historical file) are ignored by
-the parser. Converted by `scripts/convert_greb_to_jld2.jl` into a single
+the parser. Converted by `tools/convert_greb_to_jld2.jl` into a single
 combined `scenario/ipcc_scenarios.jld2`, keyed by the name between
 `ipcc.scenario.` and `.forcing` (e.g. `"rcp85"`, `"ssp585"`, `"hist"`); loaded
 at runtime via `load_co2_scenario_jld2` (see README.md's "Input Data" section).

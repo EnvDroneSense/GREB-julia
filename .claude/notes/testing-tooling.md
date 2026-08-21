@@ -58,3 +58,20 @@ matrix axis. Verified locally: 142 + 177 = 319, matching the unsharded
 total exactly; both shards pass independently.
 
 ---
+
+---
+
+## 2026-08-21: test process was single-threaded
+
+`Pkg.test()` passed no `julia_args`, so the test subprocess ran with one
+thread. Since `tendencies!` gates its `Threads.@spawn` branch on
+`Threads.nthreads() > 1`, the multithreaded circulation path was never
+executed by any test or CI job — it had only ever been validated by
+benchmarking.
+
+Fixed by a subprocess-based equivalence test plus `JULIA_NUM_THREADS=2` in CI.
+Details and the reasoning in [`performance.md`](performance.md).
+
+General lesson for this repo: anything gated on a startup-fixed setting
+(`nthreads`, `--check-bounds`, `JULIA_*`) cannot be covered by an in-process
+test. It needs a spawned subprocess, or it is not covered at all.

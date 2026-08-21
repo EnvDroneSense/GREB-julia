@@ -36,29 +36,38 @@ using Pkg; Pkg.instantiate()
 
 ## Input data
 
-The model reads a **JLD2** dataset - climatology, flux corrections, solar
-forcing and scenario tables - laid out under a single directory. At ~580 MB it
-is not shipped with the package: request the prepared bundle from the
-maintainers, unpack it anywhere, and pass its path in.
+The model reads a **JLD2** dataset — climatology, flux corrections, solar
+forcing and scenario tables — laid out under a single directory. At ~439 MB it
+is not shipped with the package; [`greb_data_dir`](@ref) fetches and caches it
+on first use via [DataDeps.jl](https://github.com/oxinabox/DataDeps.jl):
 
 ```julia
-fields = load_greb_jld2!("/path/to/greb_input_data"; dataset = :ncep)
+dir    = greb_data_dir()
+fields = load_greb_jld2!(dir; dataset = :ncep)
 ```
+
+Resolution order — only the last step touches the network:
+
+1. an explicit path, `greb_data_dir("/path/to/greb_input_data")`
+2. `ENV["GREB_DATA"]`
+3. `greb_input_data/` beside the package
+4. the `GREB-input-data` DataDep (~353 MB download, SHA256-verified)
 
 `load_greb_jld2!` *returns* the loaded state; it does not populate globals. The
 returned value must be handed to [`greb_model!`](@ref) as `fields = ...`, which
 refuses to run on an unloaded [`ClimateFields`](@ref) rather than silently
 producing a meaningless ≈233 K world. The [Tutorial](@ref) walks through this.
 
-!!! note "Planned: automatic download"
-    Distribution via [DataDeps.jl](https://github.com/oxinabox/DataDeps.jl) is
-    planned, after which the dataset will be fetched and cached on first use.
-    Until then the manual path above is the only one.
+!!! note "Non-interactive sessions"
+    Set `DATADEPS_ALWAYS_ACCEPT=true` to skip the download consent prompt. In
+    CI or any session without a terminal this is **required** — otherwise the
+    process blocks waiting on stdin. `DATADEPS_DISABLE_DOWNLOAD=true` makes a
+    would-be download throw instead.
 
 Regenerating the dataset from the original GREB `.bin` files is a maintainer
 task, not a prerequisite for using the package; see
 [`DATA_README.md`](https://github.com/EnvDroneSense/GREBClimate.jl/blob/main/DATA_README.md)
-and `scripts/convert_greb_to_jld2.jl` in the repository.
+and `tools/` in the repository.
 
 See the [Tutorial](@ref) for a runnable end-to-end example, or the
 [API Reference](@ref) for every exported function and type.

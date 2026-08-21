@@ -25,7 +25,7 @@
 # `scenario/ipcc_scenarios.jld2`, keyed by `<key>` (e.g. "rcp85", "ssp585").
 #
 # Usage:
-#   julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir] [--all]
+#   julia --project=. tools/convert_greb_to_jld2.jl [input_dir] [output_dir] [--all]
 #   # defaults: input_dir  = Data              (see DATA_README.md)
 #   #           output_dir = greb_input_data   (see README.md)
 #   # --all: also convert fields the model never reads (see MODEL_FIELD_NAMES)
@@ -467,7 +467,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
               Raw .bin input directory not found: $input_path
 
               Pass it explicitly:
-                  julia --project=. scripts/convert_greb_to_jld2.jl <input_dir> [output_dir]
+                  julia --project=. tools/convert_greb_to_jld2.jl <input_dir> [output_dir]
 
               This is a maintainer tool for regenerating the .jld2 bundle from raw
               GREB .bin files; see DATA_README.md. To *use* the package you only

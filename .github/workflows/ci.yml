@@ -28,3 +28,14 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           GREB_TEST_SHARD: ${{ matrix.shard }}
+          # The model only runs circulation!(Ta)/circulation!(q) concurrently
+          # when nthreads() > 1 (src/tendencies.jl). Thread count is fixed at
+          # startup, so a 1-thread test process never reaches that branch.
+          # Pkg.test's subprocess inherits this.
+          JULIA_NUM_THREADS: '2'
+          # The dataset is not available in CI, and the tests resolve it with
+          # allow_download=false, so data-dependent testsets skip. This is a
+          # belt-and-braces guard: if something ever does reach the DataDep,
+          # fail loudly instead of blocking on the stdin consent prompt.
+          DATADEPS_ALWAYS_ACCEPT: 'false'
+          DATADEPS_DISABLE_DOWNLOAD: 'true'

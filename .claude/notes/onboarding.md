@@ -44,13 +44,13 @@ reason. Data-free runs stay possible; they just have to say so.
 - All user-facing data documentation was written around obtaining raw `.bin`
   files and running the converter. That is a maintainer path; users get the
   `.jld2` bundle. `DATA_README.md` and the converter are now labelled as such.
-- `scripts/convert_greb_to_jld2.jl` defaulted its input directory to
+- `tools/convert_greb_to_jld2.jl` defaulted its input directory to
   `Data/input`, which does not exist — the real layout is flat `Data/` plus
   `Data/solar_forcing_scenarios/`. The documented no-argument invocation
   therefore always failed. Default corrected, with an actionable error.
 - `docs/src/tutorial.md` referenced `claude/BENCHMARKS.md`, which never existed.
 - `docs/src/index.md` claimed Julia 1.9; `Project.toml` requires 1.10.
-- README's project-structure tree omitted `benchmark/`, `archive/`, `Data/`,
+- README's project-structure tree omitted `benchmark/`, `Data/`,
   `greb_input_data/`, `DATA_README.md`, and `notebooks/PultoUI.jl`.
 - `docs/Manifest.toml` was stale — it still recorded the package under its
   pre-rename name `GREB` with the same UUID (see `67680e0`), so the documented

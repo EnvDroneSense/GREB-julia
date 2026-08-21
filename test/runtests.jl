@@ -6,7 +6,10 @@ using Test
 # are intact after the notebook -> package extraction. Full integration runs
 # (which need `greb_input_data/`) are demonstrated in examples/run_greb.jl.
 
-const DATA_DIR = joinpath(@__DIR__, "..", "greb_input_data")
+# `allow_download=false` so running the tests can never trigger the 353 MB
+# DataDeps download; data-dependent testsets @test_skip when this is absent.
+const DATA_DIR = something(greb_data_dir(; allow_download = false),
+                           joinpath(@__DIR__, "..", "greb_input_data"))
 
 # The 24 testsets below are split into two groups so CI can shard them across
 # 2 parallel jobs `run_light_tests()` (17 cheap testsets) and `run_heavy_tests()` (7
@@ -603,8 +606,57 @@ function run_light_tests()
         rm(missing_parent; recursive = true, force = true)
     end
 
+    @testset "greb_data_dir resolution order" begin
+        # Never exercises the DataDep branch: that would download 353 MB. The
+        # branch itself is a single `allow_download || return nothing` guard;
+        # what is worth testing is that the three local sources take priority
+        # over it in the right order, so a download can only ever be a last
+        # resort.
+        tmp_a, tmp_b = mktempdir(), mktempdir()
+        saved = get(ENV, "GREB_DATA", nothing)
+        try
+            # explicit path wins over everything
+            ENV["GREB_DATA"] = tmp_b
+            @test greb_data_dir(tmp_a) == tmp_a
+            # ...and over the environment even with allow_download off
+            @test greb_data_dir(tmp_a; allow_download = false) == tmp_a
+            # GREB_DATA wins over the repo-local dataset
+            @test greb_data_dir() == tmp_b
+            delete!(ENV, "GREB_DATA")
+
+            # a non-existent explicit path is an error, not a silent fallback
+            @test_throws ErrorException greb_data_dir(joinpath(tmp_a, "nope"))
+            # so is a GREB_DATA pointing nowhere
+            ENV["GREB_DATA"] = joinpath(tmp_a, "nope")
+            @test_throws ErrorException greb_data_dir()
+            delete!(ENV, "GREB_DATA")
+
+            # an empty explicit path falls through rather than erroring
+            @test greb_data_dir("") == greb_data_dir()
+        finally
+            saved === nothing ? delete!(ENV, "GREB_DATA") : (ENV["GREB_DATA"] = saved)
+            rm(tmp_a; recursive = true, force = true)
+            rm(tmp_b; recursive = true, force = true)
+        end
+    end
+
+    @testset "published dataset archive constants are coherent" begin
+        # The DataDep URL is assembled from the tag and asset name; a typo in
+        # either silently produces a 404 that only shows up on a clean machine.
+        @test occursin(GREBClimate.DATA_RELEASE_TAG, GREBClimate.DATA_URL)
+        @test endswith(GREBClimate.DATA_URL, GREBClimate.DATA_ARCHIVE_NAME)
+        @test startswith(GREBClimate.DATA_URL, "https://")
+        # SHA256 is 64 lowercase hex digits
+        @test occursin(r"^[0-9a-f]{64}$", GREBClimate.DATA_SHA256)
+        # tools/package_dataset.jl reads the tag back out of src/data.jl by
+        # regex; keep that parseable.
+        data_src = read(joinpath(@__DIR__, "..", "src", "data.jl"), String)
+        @test match(r"const DATA_RELEASE_TAG = \"([^\"]+)\"", data_src).captures[1] ==
+              GREBClimate.DATA_RELEASE_TAG
+    end
+
     @testset "converter allowlist matches what src/io.jl loads" begin
-        # scripts/convert_greb_to_jld2.jl used to convert every .bin it found,
+        # tools/convert_greb_to_jld2.jl used to convert every .bin it found,
         # emitting 11 .jld2 files (~148 MB) the model never opens. It now filters
         # on MODEL_FIELD_NAMES. This test keeps that list and src/io.jl's actual
         # loads from drifting apart in either direction.
@@ -613,7 +665,7 @@ function run_light_tests()
         # converter would run its top-level code, and io.jl's loads are spread
         # across several functions with no single introspectable list.
         repo = normpath(joinpath(@__DIR__, ".."))
-        conv = read(joinpath(repo, "scripts", "convert_greb_to_jld2.jl"), String)
+        conv = read(joinpath(repo, "tools", "convert_greb_to_jld2.jl"), String)
         io_src = read(joinpath(repo, "src", "io.jl"), String)
 
         # --- the allowlist, as literals inside the MODEL_FIELD_NAMES block ---
@@ -667,6 +719,66 @@ function run_light_tests()
 end
 
 function run_heavy_tests()
+
+    @testset "threaded circulation matches serial (subprocess -t 1 vs -t 2)" begin
+        # `tendencies!` runs circulation!(Ta) and circulation!(q) concurrently
+        # only when `Threads.nthreads() > 1` AND `ws_a !== ws_q` (see
+        # src/tendencies.jl). Thread count is fixed at Julia startup, so a
+        # single-threaded `Pkg.test()` can never reach that branch - it went
+        # untested until 2026-08-21. Spawning both counts explicitly keeps this
+        # honest no matter how the suite is invoked.
+        if !isdir(DATA_DIR)
+            @test_skip "greb_input_data/ not present"
+        else
+            # No `using Statistics`: it is not a dependency of GREBClimate's own
+            # Project.toml, so it is unavailable under `--project=<repo>` even
+            # though the test environment has it.
+            script = """
+                using GREBClimate
+                gmean(x) = sum(x) / length(x)
+                fields = redirect_stdout(devnull) do
+                    load_greb_jld2!(raw"$(DATA_DIR)"; dataset = :ncep)
+                end
+                cfg = create_experiment_config(:full_model)
+                result = redirect_stdout(devnull) do
+                    greb_model!(RunSpec(flux = 0, ctrl = 1, scnr = 0), cfg;
+                                jld2_dir = raw"$(DATA_DIR)", fields = fields)
+                end
+                # threads actually available, then a digest of every month
+                print(Threads.nthreads())
+                for rec in result.ctrl
+                    print(" ", gmean(rec.Ts), " ", gmean(rec.Ta), " ", gmean(rec.q))
+                end
+            """
+            # Only the executable from julia_cmd(), not its flags: under
+            # Pkg.test those include --check-bounds=yes, which would force the
+            # subprocess to recompile the world and make this test ~10x slower.
+            exe = first(Base.julia_cmd())
+            project = normpath(joinpath(@__DIR__, ".."))
+            run_at(n) = begin
+                cmd = `$exe --startup-file=no --project=$project -t $n -e $script`
+                out = read(cmd, String)
+                parts = split(strip(out))
+                (nthreads = parse(Int, parts[1]),
+                 digest = parse.(Float64, parts[2:end]))
+            end
+
+            serial = run_at(1)
+            threaded = run_at(2)
+
+            # the subprocesses really did run at the requested thread counts
+            @test serial.nthreads == 1
+            @test threaded.nthreads == 2
+            # 12 months x 3 quantities
+            @test length(serial.digest) == 36
+            @test length(threaded.digest) == length(serial.digest)
+
+            # Concurrency must not change the answer. The two circulation!
+            # calls touch disjoint state (separate workspaces, separate
+            # fields), so this should be bit-identical, not merely close.
+            @test threaded.digest == serial.digest
+        end
+    end
 
     @testset "greb_model! baseline: default config runs to completion with the right output shape" begin
         cfg = create_experiment_config(:full_model)

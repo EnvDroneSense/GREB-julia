@@ -623,3 +623,73 @@ its new functions hadn't been JIT-compiled yet (unlike `greb_model!`'s
 `PrecompileTools`-baked ones) — resolved with a warm-up call before timing.
 
 ---
+
+---
+
+## 2026-08-21 re-measurement (post-`Float32`, post-DataDeps)
+
+Full suite run per `.claude/skills/benchmark/SKILL.md`, with a warm precompile
+cache confirmed (`Pkg.precompile()` recompiled nothing) and the machine ~1 day
+past boot, so no post-restart OneDrive/SearchIndexer spike.
+
+| Mode | Result |
+|:-----|:-------|
+| `year` (`-t 2`, 3 reps) | **0.63 s** mean (0.56 / 0.71 / 0.619) |
+| `alloc` | **0 bytes** — hot path still allocation-free |
+| `stages` (`-t 1`) | circulation is **97.9%** of per-timestep cost |
+
+`stages` breakdown, 2000 calls each, single workspace:
+
+```
+circulation!(Ta)  664.40 µs/call   48.8%
+circulation!(q)   667.58 µs/call   49.1%
+LWradiation!       14.71 µs/call    1.1%
+hydro!              7.26 µs/call    0.5%
+SWradiation!        3.85 µs/call    0.3%
+deep_ocean!         2.78 µs/call    0.2%
+pipeline total    1360.6 µs
+```
+
+This confirms the §2.11 picture that motivated the `-t 2` recommendation:
+circulation so dominates the per-timestep cost that there is essentially no
+third lane of work for `-t 3` to pick up.
+
+### Threading: the recorded speedup was optimistic
+
+Three `threads` sweeps:
+
+| threads | sweep 1 | sweep 2 | sweep 3 | mean | range |
+|:--------|--------:|--------:|--------:|-----:|:------|
+| `-t 1`  | 1.024 s | 1.003 s | 1.018 s | 1.015 s | ±1% |
+| `-t 2`  | 1.14× | 1.54× | 1.26× | **1.31×** | 1.14–1.54× |
+| `-t 3`  | 1.31× | 1.25× | 1.08× | 1.21× | 1.08–1.31× |
+| `-t 4`  | 1.02× | 1.16× | 1.47× | 1.22× | 1.02–1.47× |
+
+`-t 2` stays the right default — fastest on average and least erratic — so the
+recommendation does not change. But the previously recorded "consistent ~1.5×,
+range 1.24–1.62×, *low* variance" overstates it: measured now it is ~1.31× with
+a low end of 1.14×. The skill file has been corrected.
+
+Worth noting `-t 1` was stable to within 1% across all three sweeps. The
+variance therefore lives in the threaded paths (scheduling and memory-bandwidth
+contention), not in general machine noise — so a single `threads` sweep is not
+evidence about `-t 2` either, not just about `-t 3`/`-t 4`.
+
+### Coverage gap found and closed: the parallel branch was never tested
+
+`tendencies!` runs `circulation!(Ta)` and `circulation!(q)` concurrently only
+when `Threads.nthreads() > 1 && ws_a !== ws_q`. Thread count is fixed at Julia
+startup and `test/runtests.jl` passed no `julia_args`, so **every test run and
+every CI job was single-threaded and the `Threads.@spawn` branch was never
+executed by any test.** The threading work was validated by benchmarking only.
+
+Closed two ways:
+
+- A heavy-shard testset spawns `-t 1` and `-t 2` subprocesses, runs a 1-year
+  control run in each, and asserts the 36 monthly-mean values (Ts/Ta/q × 12
+  months) are **bit-identical**. The two `circulation!` calls write to disjoint
+  workspaces, so exact equality is the correct assertion, not `isapprox`. It
+  also asserts each subprocess really got the requested thread count, so the
+  test cannot silently degrade into comparing two serial runs.
+- `.github/workflows/ci.yml` sets `JULIA_NUM_THREADS=2`, which `Pkg.test`'s
+  subprocess inherits, so the whole suite now exercises the parallel path too.

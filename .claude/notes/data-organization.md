@@ -56,7 +56,7 @@ source would wrongly couple independently-varying load conditions.
 **Implemented**: `load_flux_corrections_jld2!` always loads all 3 flux
 files together, matching the "always read in full" case — merged into
 `flux_corrections.jld2` (`convert_flux_corrections` in
-`scripts/convert_greb_to_jld2.jl`), measured **~35% faster** (19.89ms vs
+`tools/convert_greb_to_jld2.jl`), measured **~35% faster** (19.89ms vs
 30.78ms combined vs. separate), no size penalty. `test/runtests.jl` updated
 to match; full suite re-run clean (319/319 pass).
 
@@ -95,7 +95,7 @@ any code path.
 | Solar lat×time (48×730 float32) | 140,160 B | 1 (root) + 109 (`solar_forcing_scenarios/`, 15,296,940 B measured) | `solar_radiation.clim.bin`, `greb.solar.eccentricity.<N>.bin`, `greb.solar.obliquity.<N>.bin` |
 | CO2 scenario text | 3,856–7,029 B each, **63,443 B total (measured)** | 10 | `ipcc.scenario.rcp85.forcing.txt`, `ipcc.scenario.hist.forcing.CO2.emission.pop.txt` |
 
-**Layout/docs mismatch:** `DATA_README.md` and `scripts/convert_greb_to_jld2.jl`'s
+**Layout/docs mismatch:** `DATA_README.md` and `tools/convert_greb_to_jld2.jl`'s
 default (`input_path = Data/input`) both expect an `input/` subdirectory. On disk,
 files are directly under `Data/` — `Data/input/` doesn't exist (confirmed: the
 conversion run below had to be pointed explicitly at `Data`, not the default).
@@ -121,8 +121,8 @@ now**, and only 25.7 MiB (4%) remains out of scope.
 #### 1.3 `greb_dataset_jld2/` — actually built for this document
 
 Not committed (gitignored, `.gitignore:17`) and not previously built in this
-repo. For this document, `scripts/convert_greb_to_jld2.jl` was run for real
-(`julia --project=. scripts/convert_greb_to_jld2.jl Data <scratch-dir>`) to get
+repo. For this document, `tools/convert_greb_to_jld2.jl` was run for real
+(`julia --project=. tools/convert_greb_to_jld2.jl Data <scratch-dir>`) to get
 measured JLD2 output sizes rather than guessing at container overhead:
 
 - **49 field files converted, 0 failed.** Total reported by the script: 619.1 MB

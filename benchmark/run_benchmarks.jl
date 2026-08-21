@@ -16,8 +16,9 @@
 #
 # Usage:
 #   julia --project=. -t 2 benchmark/run_benchmarks.jl [mode] [jld2_dir] [reps]
-#   (mode defaults to "year"; jld2_dir defaults to GREB_DATA or
-#   ../greb_input_data; reps only applies to "year", default 3)
+#   (mode defaults to "year"; jld2_dir is resolved by `greb_data_dir` -
+#   $GREB_DATA or ../greb_input_data, never a download; reps only applies to
+#   "year", default 3)
 #
 #   -t 2, not -t 3, is the recommended thread count for `year` - see the
 #   `sweep_threads` docstring below for why.
@@ -236,7 +237,11 @@ function check_allocations(jld2_dir::AbstractString)
     return bytes
 end
 
-const DEFAULT_DATA_DIR = get(ENV, "GREB_DATA", joinpath(@__DIR__, "..", "greb_input_data"))
+# `allow_download=false`: benchmarking must never pull 353 MB over the network
+# as a side effect. Falls back to the conventional path so the existing
+# "directory not found" warning still fires with a useful message.
+const DEFAULT_DATA_DIR = something(greb_data_dir(; allow_download = false),
+                                   joinpath(@__DIR__, "..", "greb_input_data"))
 
 const _MODES = ("year", "stages", "threads", "alloc")
 
