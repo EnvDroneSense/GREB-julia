@@ -12,6 +12,16 @@
 # example outputs
 /examples/*.png
 
-# Local model input data (not committed — see DATA_README.md)
+# Local model input data (not committed - see DATA_README.md)
 /Data/
-/greb_dataset_jld2/
+/greb_input_data/
+
+# Built dataset archives (see tools/package_dataset.jl) - large, and published
+# as GitHub release assets rather than committed
+/greb_input_data-*.tar.gz
+
+# Agent working notes - local development scratch, not part of the package
+/.claude/notes/
+
+# Local agent guidance - environment quirks and repo conventions, not shipped
+/CLAUDE.md

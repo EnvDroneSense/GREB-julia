@@ -236,6 +236,13 @@ Loaded climatology, derived grid fields, flux corrections, and the
 regional-CO2 mask/solar table — everything `load_greb_jld2!` fills in and
 every physics function reads. One instance per `greb_model!` run; never
 shared as global state.
+
+`ClimateFields()` builds an all-zero instance and leaves `loaded = false`;
+`load_greb_jld2!` sets `loaded = true` once real climatology is in place.
+[`greb_model!`](@ref) refuses to run unloaded fields unless explicitly
+told to via `allow_uninitialized=true` - an all-zero climatology produces
+a physically meaningless (~-40 °C) world rather than an error, so the
+flag exists to keep that path opt-in.
 """
 mutable struct ClimateFields
     # 2D fields (xdim, ydim)
@@ -289,6 +296,10 @@ mutable struct ClimateFields
 
     # Regional CO₂ mask (1.0 = full CO₂, 0.5 = half CO₂)
     co2_part::Matrix{Float32}
+
+    # false for a bare `ClimateFields()`; set by `load_greb_jld2!`. See the
+    # docstring above and `greb_model!`'s `allow_uninitialized` keyword.
+    loaded::Bool
 end
 
 function ClimateFields()
@@ -307,6 +318,7 @@ function ClimateFields()
         z2(ydim, nstep_yr), z2(xdim, ydim, Int(nstep_yr)),
         z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr), z2(xdim, ydim, nstep_yr),
         ones(Float32, xdim, ydim),
+        false,
     )
 end
 

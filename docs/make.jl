@@ -1,5 +1,5 @@
 # =============================================================================
-# docs/make.jl — builds the GREB.jl Documenter site.
+# docs/make.jl — builds the GREBClimate.jl Documenter site.
 #
 # Local build (once, to link the docs env to the local package source):
 #   julia --project=docs -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
@@ -10,11 +10,11 @@
 # =============================================================================
 
 using Documenter
-using GREB
+using GREBClimate
 
 makedocs(
-    sitename = "GREB.jl",
-    modules = [GREB],
+    sitename = "GREBClimate.jl",
+    modules = [GREBClimate],
     authors = "Thomas Struys",
     checkdocs = :exports,
     pages = [
@@ -26,6 +26,6 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/EnvDroneSense/GREB-julia.git",
+    repo = "github.com/EnvDroneSense/GREBClimate.jl.git",
     devbranch = "main",
 )

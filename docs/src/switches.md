@@ -241,4 +241,4 @@ Abbreviations used above: **DF11** = Dommenget & Flöter (2011); **Hydro19**
 2. **Hydro19** - Stassen, C., Dommenget, D., and Loveday, N. (2019). A hydrological cycle model for the Globally Resolved Energy Balance (GREB) model v1.0. *Geoscientific Model Development*, 12, 425-440. [doi:10.5194/gmd-12-425-2019](https://doi.org/10.5194/gmd-12-425-2019)
 3. **MSCM** - Dommenget, D., Nice, K., Bayr, T., Kasang, D., Stassen, C., and Rezny, M. The Monash Simple Climate Model Experiments: An interactive database of the mean climate, climate change and scenarios simulations. *Geoscientific Model Development*, 12, 2155-2179. [doi:10.5194/gmd-12-2155-2019](https://doi.org/10.5194/gmd-12-2155-2019)
 
-See the repository [README](https://github.com/EnvDroneSense/GREB-julia#references)'s References section for the original GREB model homepage link.
+See the repository [README](https://github.com/EnvDroneSense/GREBClimate.jl#references)'s References section for the original GREB model homepage link.

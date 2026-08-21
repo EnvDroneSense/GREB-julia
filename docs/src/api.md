@@ -1,5 +1,5 @@
 # API Reference
 
 ```@autodocs
-Modules = [GREB]
+Modules = [GREBClimate]
 ```

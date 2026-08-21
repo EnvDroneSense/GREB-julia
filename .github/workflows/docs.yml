@@ -28,3 +28,7 @@ jobs:
       - uses: julia-actions/julia-docdeploy@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Building the docs only registers the DataDep, never resolves it.
+          # Guard anyway so a stray datadep"..." cannot hang the job.
+          DATADEPS_ALWAYS_ACCEPT: 'false'
+          DATADEPS_DISABLE_DOWNLOAD: 'true'

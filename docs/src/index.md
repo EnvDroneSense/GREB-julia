@@ -1,4 +1,4 @@
-# GREB.jl
+# GREBClimate.jl
 
 A Julia translation of the **Globally Resolved Energy Balance (GREB)**
 climate model, originally developed by Dietmar Dommenget and colleagues at
@@ -19,11 +19,12 @@ sub-steps for atmospheric circulation (730 time steps per year).
 
 ## Installation
 
-Requires Julia 1.9 or later.
+Requires Julia 1.10 (the current LTS) or later, matching the `julia = "1.10"`
+compat bound in `Project.toml`.
 
 ```julia
 using Pkg
-Pkg.develop(url = "https://github.com/EnvDroneSense/GREB-julia")
+Pkg.develop(url = "https://github.com/EnvDroneSense/GREBClimate.jl")
 ```
 
 Or, working from a clone:
@@ -35,18 +36,45 @@ using Pkg; Pkg.instantiate()
 
 ## Input data
 
-The model reads **JLD2**-formatted climatology, flux-correction, and solar
-forcing files. These are too large to ship with the package; see
-[`DATA_README.md`](https://github.com/EnvDroneSense/GREB-julia/blob/main/DATA_README.md)
-in the repository for the expected layout and the conversion script that
-builds a `greb_dataset_jld2/` directory from the original GREB `.bin` files.
+The model reads a **JLD2** dataset — climatology, flux corrections, solar
+forcing and scenario tables — laid out under a single directory. At ~439 MB it
+is not shipped with the package; [`greb_data_dir`](@ref) fetches and caches it
+on first use via [DataDeps.jl](https://github.com/oxinabox/DataDeps.jl):
+
+```julia
+dir    = greb_data_dir()
+fields = load_greb_jld2!(dir; dataset = :ncep)
+```
+
+Resolution order — only the last step touches the network:
+
+1. an explicit path, `greb_data_dir("/path/to/greb_input_data")`
+2. `ENV["GREB_DATA"]`
+3. `greb_input_data/` beside the package
+4. the `GREB-input-data` DataDep (~353 MB download, SHA256-verified)
+
+`load_greb_jld2!` *returns* the loaded state; it does not populate globals. The
+returned value must be handed to [`greb_model!`](@ref) as `fields = ...`, which
+refuses to run on an unloaded [`ClimateFields`](@ref) rather than silently
+producing a meaningless ≈233 K world. The [Tutorial](@ref) walks through this.
+
+!!! note "Non-interactive sessions"
+    Set `DATADEPS_ALWAYS_ACCEPT=true` to skip the download consent prompt. In
+    CI or any session without a terminal this is **required** — otherwise the
+    process blocks waiting on stdin. `DATADEPS_DISABLE_DOWNLOAD=true` makes a
+    would-be download throw instead.
+
+Regenerating the dataset from the original GREB `.bin` files is a maintainer
+task, not a prerequisite for using the package; see
+[`DATA_README.md`](https://github.com/EnvDroneSense/GREBClimate.jl/blob/main/DATA_README.md)
+and `tools/` in the repository.
 
 See the [Tutorial](@ref) for a runnable end-to-end example, or the
 [API Reference](@ref) for every exported function and type.
 
 ## An interactive alternative
 
-The package also ships an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl)
+The repository also ships an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl)
 notebook (`notebooks/GREB_julia.jl`) with widget-driven experiment
-configuration — useful for exploration, though this documentation covers the
-plain-Julia API.
+configuration - useful for exploration. It is a front-end onto the same
+package; this documentation covers the plain-Julia API it calls.

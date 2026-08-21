@@ -1,8 +1,13 @@
 ### Convert GREB binary files to JLD2 (JuliaIO/JLD2.jl) files ###
 #
+# MAINTAINER TOOL. Users of the package do not need to run this - they get the
+# prepared `.jld2` bundle directly (see README.md's "Getting the data"). This
+# script is how that bundle is produced.
+#
 # Converts the raw GREB `.bin` input files (see DATA_README.md for the
-# expected layout, normally under `Data/input/`) into the `.jld2` dataset
-# that `load_greb_jld2!`/`GREB.read_jld2` read (see README.md's "Input Data"
+# expected layout: files flat in the input dir, with solar-forcing scenarios
+# in an optional `solar_forcing_scenarios/` subdirectory) into the `.jld2` dataset
+# that `load_greb_jld2!`/`GREBClimate.read_jld2` read (see README.md's "Input Data"
 # section for the resulting directory structure).
 #
 # Each field is written as its own `.jld2` file with keys "data"
@@ -14,15 +19,16 @@
 # globbing `greb.solar.<prefix>.<N>.bin` and sorting numerically rather than
 # assuming a fixed stride, since the real files aren't evenly spaced.
 #
-# CO₂ scenario text files (`ipcc.scenario.<key>.forcing*.txt` — RCPs, SSPs,
+# CO₂ scenario text files (`ipcc.scenario.<key>.forcing*.txt` - RCPs, SSPs,
 # and the historical CO2/emission/population file) are parsed into
 # `year => CO2` lookup tables and combined into a single
 # `scenario/ipcc_scenarios.jld2`, keyed by `<key>` (e.g. "rcp85", "ssp585").
 #
 # Usage:
-#   julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
-#   # defaults: input_dir  = Data/input        (see DATA_README.md)
-#   #           output_dir = greb_dataset_jld2  (see README.md)
+#   julia --project=. tools/convert_greb_to_jld2.jl [input_dir] [output_dir] [--all]
+#   # defaults: input_dir  = Data              (see DATA_README.md)
+#   #           output_dir = greb_input_data   (see README.md)
+#   # --all: also convert fields the model never reads (see MODEL_FIELD_NAMES)
 
 using JLD2
 
@@ -105,15 +111,69 @@ of going through `convert_all`'s one-file-per-field loop.
 """
 const FLUX_CORRECTION_NAMES = ("Tsurf_flux_correction", "vapour_flux_correction", "Tocean_flux_correction")
 
+"""
+`test/runtests.jl` asserts this set matches what `src/io.jl` loads, so the two
+cannot drift. Add a name here when the model starts reading a new field.
+"""
+const MODEL_FIELD_NAMES = Set{String}([
+    # static
+    "global.topography", "greb.glaciers",
+    # solar
+    "solar_radiation.clim",
+    # NCEP climatology (dataset=:ncep)
+    "ncep.tsurf.1948-2007.clim", "ncep.zonal_wind.850hpa.clim",
+    "ncep.meridional_wind.850hpa.clim", "ncep.atmospheric_humidity.clim",
+    "ncep.soil_moisture.clim",
+    # ERA-Interim climatology (dataset=:era; soil moisture falls back to NCEP)
+    "erainterim.tsurf.1979-2015.clim", "erainterim.zonal_wind.850hpa.clim",
+    "erainterim.meridional_wind.850hpa.clim", "erainterim.atmospheric_humidity.clim",
+    # common to both datasets
+    "isccp.cloud_cover.clim", "woce.ocean_mixed_layer_depth.clim", "Tocean.clim",
+    "erainterim.omega.vertmean.clim", "erainterim.omega_std.vertmean.clim",
+    "erainterim.windspeed.850hpa.clim",
+    # CMIP5 RCP8.5 climate-change anomalies (load_cc_anomaly_jld2!)
+    "cmip5.tsurf.rcp85.ensmean.forcing", "cmip5.zonal.wind.rcp85.ensmean.forcing",
+    "cmip5.meridional.wind.rcp85.ensmean.forcing", "cmip5.windspeed.rcp85.ensmean.forcing",
+    "cmip5.omega.rcp85.ensmean.forcing",
+    # ENSO anomalies (load_enso_anomaly_jld2!), suffix elnino/lanina
+    ("erainterim.$f.$s.forcing" for f in ("tsurf", "zonal.wind", "meridional.wind",
+                                          "windspeed", "omega")
+                                for s in ("elnino", "lanina"))...,
+])
+
 function convert_all(input_path::String, output_dir::String)
     println("🔄 CONVERTING TO JLD2")
     println("="^50)
     println("Input:  $input_path")
     println("Output: $output_dir\n")
 
-    bin_files = filter(endswith(".bin"), readdir(input_path; join=true))
-    bin_files = filter(p -> splitext(basename(p))[1] ∉ FLUX_CORRECTION_NAMES, bin_files)
-    println("Found $(length(bin_files)) .bin files (flux corrections combined separately, see below)\n")
+    all_bins = filter(endswith(".bin"), readdir(input_path; join=true))
+    all_bins = filter(p -> splitext(basename(p))[1] ∉ FLUX_CORRECTION_NAMES, all_bins)
+
+    # Only convert fields the model reads. See MODEL_FIELD_NAMES above; pass
+    # `--all` to convert everything present.
+    convert_everything = "--all" in ARGS
+    bin_files = convert_everything ? all_bins :
+        filter(p -> splitext(basename(p))[1] ∈ MODEL_FIELD_NAMES, all_bins)
+    skipped = length(all_bins) - length(bin_files)
+
+    println("Found $(length(all_bins)) .bin files (flux corrections combined separately, see below)")
+    if convert_everything
+        println("--all given: converting all $(length(bin_files)), including fields the model never reads.")
+    else
+        println("Converting $(length(bin_files)) the model reads; skipping $skipped (pass --all to include them).")
+        for q in sort(filter(p -> splitext(basename(p))[1] ∉ MODEL_FIELD_NAMES, all_bins))
+            println("    skip  $(basename(q))")
+        end
+    end
+    println()
+
+    missing_fields = setdiff(MODEL_FIELD_NAMES,
+                             Set(splitext(basename(p))[1] for p in all_bins))
+    if !isempty(missing_fields)
+        @warn "Input directory is missing $(length(missing_fields)) field(s) the model reads; " *
+              "the resulting dataset will be incomplete." missing=sort(collect(missing_fields))
+    end
 
     success, failed, total_bytes = 0, 0, 0
 
@@ -165,7 +225,7 @@ function convert_flux_corrections(input_path::String, output_dir::String)
                 file[name] = arr
                 println("  ✓ $name → combined")
             else
-                println("  ⚠ $name.bin not found — omitted (load_flux_corrections_jld2! will zero-fill)")
+                println("  ⚠ $name.bin not found - omitted (load_flux_corrections_jld2! will zero-fill)")
             end
         end
     end
@@ -226,7 +286,7 @@ function convert_solar_scenarios(input_path::String, output_dir::String)
 
     solar_dir = joinpath(input_path, "solar_forcing_scenarios")
     if !isdir(solar_dir)
-        println("  ⚠ $solar_dir not found — skipping solar scenarios (optional, see DATA_README.md)")
+        println("  ⚠ $solar_dir not found - skipping solar scenarios (optional, see DATA_README.md)")
         return
     end
     mkpath(output_dir)
@@ -313,7 +373,7 @@ function convert_scenario_texts(input_path::String, output_dir::String)
                         readdir(input_path; join=true))
 
     if isempty(txt_files)
-        println("  ⚠ No ipcc.scenario.*.forcing*.txt files found in $input_path — skipping\n")
+        println("  ⚠ No ipcc.scenario.*.forcing*.txt files found in $input_path - skipping\n")
         return
     end
 
@@ -401,7 +461,19 @@ function main(input_path::String, output_dir::String)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    input_path = length(ARGS) >= 1 ? ARGS[1] : joinpath(@__DIR__, "..", "Data", "input")
-    output_dir = length(ARGS) >= 2 ? ARGS[2] : joinpath(@__DIR__, "..", "greb_dataset_jld2")
+    input_path = length(ARGS) >= 1 ? ARGS[1] : joinpath(@__DIR__, "..", "Data")
+    if !isdir(input_path)
+        error("""
+              Raw .bin input directory not found: $input_path
+
+              Pass it explicitly:
+                  julia --project=. tools/convert_greb_to_jld2.jl <input_dir> [output_dir]
+
+              This is a maintainer tool for regenerating the .jld2 bundle from raw
+              GREB .bin files; see DATA_README.md. To *use* the package you only
+              need the prepared .jld2 dataset - see README.md, "Getting the data".
+              """)
+    end
+    output_dir = length(ARGS) >= 2 ? ARGS[2] : joinpath(@__DIR__, "..", "greb_input_data")
     main(input_path, output_dir)
 end

@@ -2,28 +2,37 @@
 
 [![Julia](https://img.shields.io/badge/Julia-1.10+-9558B2?logo=julia)](https://julialang.org/)
 [![Pluto](https://img.shields.io/badge/Pluto-Interactive-purple)](https://github.com/fonsp/Pluto.jl)
-[![docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://EnvDroneSense.github.io/GREB-julia/)
+[![docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://EnvDroneSense.github.io/GREBClimate.jl/)
 
-A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University. This implementation runs in an interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook with process isolation capabilities for decomposition experiments.
+A high-performance Julia translation of the **Globally Resolved Energy Balance (GREB)** climate model, originally developed by Dietmar Dommenget and colleagues at Monash University.
+
+GREBClimate is a **Julia package**: you call it from a script or the REPL, and nothing is held as module-global state. An interactive [Pluto.jl](https://github.com/fonsp/Pluto.jl) notebook ships alongside it (`notebooks/GREB_julia.jl`) for widget-driven exploration and process-isolation decomposition experiments, but it is one front-end onto the package rather than the model itself.
 
 ---
-> **Repository layout:** GREB is now organized as a standard Julia package.
-> The model code lives under `src/` (a `module GREB`, originally extracted
-> **verbatim** from the notebook and since split into topical files - see
-> `src/GREB.jl` for the include order), tests in `test/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+> **Repository layout:** GREB is now organized as a standard Julia package,
+> `GREBClimate.jl`. The model code lives under `src/` (a `module GREBClimate`,
+> originally extracted **verbatim** from the notebook and since split into
+> topical files - see `src/GREBClimate.jl` for the include order), tests in
+> `test/`, a [Documenter.jl](https://EnvDroneSense.github.io/GREBClimate.jl/)
 > site in `docs/`, a plain-Julia driver in `examples/run_greb.jl`, and the
 > original interactive Pluto notebook - unchanged - in `notebooks/GREB_julia.jl`.
 > See [Project Structure](#project-structure) for the full layout.
 >
 > ```julia
 > julia --project=.                 # activate the package env
-> using GREB
-> cfg = create_experiment_config(:full_model)
-> load_greb_jld2!("greb_dataset_jld2"; dataset=:ncep)
-> result = greb_model!(RunSpec(), cfg)   # flux=0, ctrl=1, scnr=1 years
+> using GREBClimate
+> cfg    = create_experiment_config(:full_model)
+> fields = load_greb_jld2!("greb_input_data"; dataset=:ncep)
+> result = greb_model!(RunSpec(), cfg;    # flux=0, ctrl=1, scnr=1 years
+>                      jld2_dir="greb_input_data", fields=fields)
 > ```
+> `load_greb_jld2!` **returns** the loaded climatology - it does not populate
+> global state - so the result must be handed to `greb_model!` via `fields=`.
+> Omitting it is refused rather than silently run; see
+> [Uninitialized fields](#uninitialized-fields) below.
+>
 > Run the tests with `julia --project=. -e 'using Pkg; Pkg.test()'`, or the full
-> driver with `julia --project=. examples/run_greb.jl <path/to/greb_dataset_jld2>`.
+> driver with `julia --project=. examples/run_greb.jl <path/to/greb_input_data>`.
 
 ## 📖 Table of Contents
 
@@ -60,7 +69,7 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 - 🔬 Support for multiple climate datasets (NCEP, ERA-Interim)
 - 🌡️ IPCC climate scenarios - all four RCPs and five SSPs are implemented (`:rcp26`/`:rcp45`/`:rcp60`/`:rcp85`, `:ssp119`/`:ssp126`/`:ssp245`/`:ssp460`/`:ssp585`), plus a historical CO2 (1850–2017) hindcast (`:historical_co2`) and a user-supplied CO2 trajectory (`:custom_co2`)
 - 🧩 "Deconstruct" experiments (`:decon_mean_climate`, `:decon_2xco2`) - toggle individual mean-climate/2×CO₂-response feedback processes on or off via `log_*_dmc`/`log_*_drsp` keywords passed to `create_experiment_config`
-- ⚡ Multi-threaded physics - the temperature and humidity `circulation!` calls run concurrently via `Threads.@spawn` when Julia is started with 3+ threads (e.g. `julia --project=. -t 3`)
+- ⚡ Multi-threaded physics - the temperature and humidity `circulation!` calls run concurrently via `Threads.@spawn` when Julia is started with 2+ threads (e.g. `julia --project=. -t 2`, the recommended count - see `.claude/skills/benchmark/SKILL.md` for why more threads no longer reliably helps further)
 - 🎯 `Float32` throughout - climatology, workspace buffers, and model state all compute in single precision (matching the `Float32` JLD2 input data natively, no upconversion), for a further ~1.6× wall-clock speedup on top of threading, with output validated against the previous `Float64` path to well under 0.01 K
 - ☀️ Orbital forcing and paleoclimate experiments
 
@@ -71,15 +80,15 @@ This implementation has been translated from Fortran90 to Julia with a focus on:
 Requires **Julia 1.10** (the current LTS) or later. Download from [julialang.org](https://julialang.org/downloads/).
 
 ```bash
-git clone https://github.com/EnvDroneSense/GREB-julia
-cd GREB-julia
+git clone https://github.com/EnvDroneSense/GREBClimate.jl
+cd GREBClimate.jl
 ```
 
 ### Installation
 
-GREB is not yet registered in the Julia General Registry — once it is,
-`Pkg.add("GREB")` will work directly. Until then, install from the git
-clone above:
+GREBClimate is not yet registered in the Julia General Registry — once it
+is, `Pkg.add("GREBClimate")` will work directly. Until then, install from
+the git clone above:
 
 ```julia
 using Pkg
@@ -92,11 +101,12 @@ This installs all dependencies from `Project.toml`:
 | Package | Purpose |
 |:--------|:--------|
 | `JLD2` | Reading/writing the model's `.jld2` input data |
+| `DataDeps` | Fetching and caching the input dataset on first use |
 | `LoopVectorization` | SIMD performance |
 | `PrecompileTools` | Precompiles hot kernels at build time (faster first run) |
 
 The Pluto notebook environment (`notebooks/`) separately depends on `PlutoUI`
-for its interactive controls. The [Documenter.jl](https://EnvDroneSense.github.io/GREB-julia/)
+for its interactive controls. The [Documenter.jl](https://EnvDroneSense.github.io/GREBClimate.jl/)
 site under `docs/` has its own environment too.
 
 ### Launch Pluto (optional)
@@ -115,35 +125,106 @@ Open `GREB_julia.jl` from the Pluto interface.
 
 The model reads **JLD2** formatted files ([JuliaIO/JLD2.jl](https://github.com/JuliaIO/JLD2.jl)) - a standard Julia data container. Each field file stores plain Julia values under the keys `"data"` (an `Array{Float32}`), `"dim_names"`, and optionally `"coords"` (physical coordinate values, e.g. an orbital scenario's index) and `"ctl"` (the original GrADS `.ctl` metadata text). `load_greb_jld2!` loads this data directly into `Float32` `ClimateFields` - the same precision the model computes in throughout, so no promotion happens at load time.
 
-In the original model these were all separate `.bin` files. `scripts/convert_greb_to_jld2.jl` converts the raw GREB `.bin` input files (see [DATA_README.md](DATA_README.md) for their expected layout, normally under `Data/input/`) into this `.jld2` layout:
+### Getting the data
 
-```bash
-julia --project=. scripts/convert_greb_to_jld2.jl [input_dir] [output_dir]
-# defaults: input_dir=Data/input, output_dir=greb_dataset_jld2
+The dataset is ~439 MB unpacked, so it is **not** committed to the repository
+(`greb_input_data/` is gitignored). It is fetched on demand via
+[DataDeps.jl](https://github.com/oxinabox/DataDeps.jl):
+
+```julia
+using GREBClimate
+dir    = greb_data_dir()        # prompts, downloads (~353 MB) and caches on first use
+fields = load_greb_jld2!(dir; dataset=:ncep)
 ```
 
-These data files are too large to upload to GitHub but can be made available on request, or regenerated from the raw `.bin` files with the converter script.
+`greb_data_dir()` resolves in this order, and only the last step touches the
+network:
+
+| | Source |
+|--:|:-------|
+| 1 | an explicit path — `greb_data_dir("/path/to/greb_input_data")` |
+| 2 | `$GREB_DATA` |
+| 3 | `greb_input_data/` beside the repository |
+| 4 | the `GREB-input-data` DataDep — downloaded and cached |
+
+So if you already have the dataset, nothing is downloaded. Point at it directly,
+or set the environment variable once:
+
+```bash
+export GREB_DATA=/path/to/greb_input_data
+julia --project=. examples/run_greb.jl
+```
+
+The download is verified against a recorded SHA256 and cached under
+`~/.julia/scratchspaces/.../datadeps/GREB-input-data`, so it happens once per
+machine rather than once per project.
+
+Two environment variables are worth knowing:
+
+| Variable | Effect |
+|:---------|:-------|
+| `DATADEPS_ALWAYS_ACCEPT=true` | Skip the download prompt. **Required** in CI or any non-interactive session, which otherwise blocks waiting on stdin. |
+| `DATADEPS_DISABLE_DOWNLOAD=true` | Make a would-be download throw instead. Useful on metered connections. |
+
+Running the tests or the benchmarks never downloads anything — both resolve with
+`allow_download=false` and skip data-dependent work when no local dataset is
+found.
+
+### Regenerating the data from raw `.bin` files (maintainers)
+
+You do **not** need this to run the model - it is how the `.jld2` bundle above
+is produced in the first place. The raw GREB `.bin` inputs are collated from
+several upstream sources and are not redistributed here;
+[DATA_README.md](DATA_README.md) documents the files and their layout.
+
+```bash
+julia --project=. tools/convert_greb_to_jld2.jl <input_dir> [output_dir]
+# output_dir defaults to greb_input_data/
+```
+
+To publish a regenerated dataset, build the distributable archive and its
+checksum, then attach it to the `data-v1` release:
+
+```bash
+julia --project=. tools/package_dataset.jl greb_input_data greb_input_data-v1.tar.gz
+```
+
+That script validates the tree against the converter's allowlist first (so a
+stray field cannot silently enlarge every user's download), builds a
+reproducible `tar.gz`, and prints the SHA256 to paste into `DATA_SHA256` in
+[`src/data.jl`](src/data.jl).
 
 ### Directory Structure
 
 ```
-greb_dataset_jld2/
+greb_input_data/                    # 39 files, ~439 MB
 ├── static/
 │   ├── global.topography.jld2      # 2D (96×48)
 │   └── greb.glaciers.jld2          # 2D (96×48)
-├── climatology/
-│   ├── ncep.tsurf.1948-2007.clim.jld2       # 3D (96×48×730)
+├── climatology/                    # 31 files; all 3D (96×48×730) unless noted
+│   │   # dataset=:ncep
+│   ├── ncep.tsurf.1948-2007.clim.jld2
 │   ├── ncep.zonal_wind.850hpa.clim.jld2
 │   ├── ncep.meridional_wind.850hpa.clim.jld2
 │   ├── ncep.atmospheric_humidity.clim.jld2
-│   ├── ncep.soil_moisture.clim.jld2
+│   ├── ncep.soil_moisture.clim.jld2        # also used by dataset=:era
+│   │   # dataset=:era (alternative to the ncep.* four above)
+│   ├── erainterim.tsurf.1979-2015.clim.jld2
+│   ├── erainterim.zonal_wind.850hpa.clim.jld2
+│   ├── erainterim.meridional_wind.850hpa.clim.jld2
+│   ├── erainterim.atmospheric_humidity.clim.jld2
+│   │   # common to both datasets
 │   ├── isccp.cloud_cover.clim.jld2
 │   ├── woce.ocean_mixed_layer_depth.clim.jld2
 │   ├── Tocean.clim.jld2
 │   ├── erainterim.omega.vertmean.clim.jld2
 │   ├── erainterim.omega_std.vertmean.clim.jld2
 │   ├── erainterim.windspeed.850hpa.clim.jld2
-│   └── flux_corrections.jld2       # Tsurf/vapour/Tocean flux corrections, combined (always loaded together)
+│   ├── flux_corrections.jld2       # Tsurf/vapour/Tocean corrections, combined (always loaded together)
+│   │   # CMIP5 RCP8.5 anomalies - climate-change experiments only
+│   ├── cmip5.{tsurf,zonal.wind,meridional.wind,windspeed,omega}.rcp85.ensmean.forcing.jld2
+│   │   # ENSO anomalies - :elnino / :lanina only (10 files)
+│   └── erainterim.{tsurf,zonal.wind,meridional.wind,windspeed,omega}.{elnino,lanina}.forcing.jld2
 ├── solar/
 │   └── solar_radiation.clim.jld2   # 2D (48×730)
 ├── solar_scenarios/                # Optional
@@ -154,14 +235,40 @@ greb_dataset_jld2/
     ├── ipcc_scenarios.jld2        # Dict{String,Dict{Int,Float64}}, keyed "rcp85"/"ssp585"/"hist"/...
     │                              # ("hist" backs :historical_co2, which starts at year 1850 not 1950)
     └── historical_emissions_population.jld2   # year => (co2_emissions_gt_co2_yr, population_billions)
+                                    # written by the converter; not read by the model
+                                    # or the tests. Kept for analysis use (11 KB).
 ```
 
 ### Loading Data
 
-In the notebook, set the `jld2_dir` variable and run:
+```julia
+fields = load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
+```
+
+`load_greb_jld2!` returns a [`ClimateFields`](https://EnvDroneSense.github.io/GREBClimate.jl/)
+holding the climatology, derived grid geometry, flux corrections and solar
+table. It is a value, not global state: hold several independent instances in
+one session (e.g. for parameter sweeps), and pass the one you want into
+`greb_model!` with `fields=`.
+
+#### Uninitialized fields
+
+A bare `ClimateFields()` is all zeros. Stepping the model on a zero
+climatology runs to completion but yields a physically meaningless world
+(global-mean Ts ≈ 233 K / −40 °C), so `greb_model!` **refuses** it rather than
+returning plausible-looking nonsense:
 
 ```julia
-load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
+julia> greb_model!(RunSpec(), cfg)          # forgot fields=
+ERROR: greb_model! was given an uninitialized ClimateFields (all-zero climatology).
+```
+
+Data-free runs are legitimate for config- and scenario-plumbing tests (and for
+package precompilation, which must not require the dataset). Those opt in
+explicitly:
+
+```julia
+greb_model!(RunSpec(scnr=0), cfg; jld2_dir="", allow_uninitialized=true)
 ```
 
 ---
@@ -170,7 +277,7 @@ load_greb_jld2!(jld2_dir; dataset=:ncep)   # or :era
 ### 1. Load Data
 
 ```julia
-jld2_dir = joinpath(@__DIR__, "greb_dataset_jld2")
+jld2_dir = joinpath(@__DIR__, "greb_input_data")
 fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
 ```
 
@@ -214,7 +321,7 @@ result.scnr    # Vector{MonthlyRecord} (scenario)
 Each `MonthlyRecord` is a `NamedTuple` of `(xdim, ydim)` `Matrix{Float32}` fields:
 `Ts, Ta, To, q, albedo, ice, precip, evap, qcrcl, sw, lw, qlat, qsens`
 
-See the [Tutorial](https://EnvDroneSense.github.io/GREB-julia/tutorial/) or
+See the [Tutorial](https://EnvDroneSense.github.io/GREBClimate.jl/tutorial/) or
 [`examples/run_greb.jl`](examples/run_greb.jl) for the full runnable version
 of the above, including a global-mean summary and an optional plot.
 
@@ -239,12 +346,13 @@ Toggle the **Execute Model** checkbox to run; results land in `last_run`
 ## 📁 Project Structure
 
 ```
-GREB-julia/
-├── src/                        # the GREB package (module GREB)
-│   ├── GREB.jl                 # module shell + include order
+GREBClimate.jl/
+├── src/                        # the GREBClimate package (module GREBClimate)
+│   ├── GREBClimate.jl          # module shell + include order
 │   ├── constants.jl            # grid/physical constants
 │   ├── config.jl               # PhysicsConfig, RunSpec, experiment presets
 │   ├── state.jl                # ClimateFields, ModelState, workspaces
+│   ├── data.jl                 # greb_data_dir(): dataset location + DataDep
 │   ├── io.jl                   # JLD2 loaders
 │   ├── physics/                # radiation.jl, hydrology.jl, ocean.jl
 │   ├── circulation.jl          # diffusion/advection/convergence
@@ -253,11 +361,27 @@ GREB-julia/
 │   ├── postprocess.jl          # monthly climatology/anomalies
 │   └── model.jl                # init_model!/qflux_correction!/greb_model!
 ├── test/runtests.jl            # unit, integration, and golden-regression tests
-├── docs/                       # Documenter.jl site (API reference + tutorial)
-├── examples/run_greb.jl        # plain-Julia driver (no Pluto)
-├── notebooks/GREB_julia.jl     # original interactive Pluto notebook (unchanged)
-├── scripts/convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter
-└── claude/                     # dev notes: IMPROVEMENTS.md (current state), CHANGELOG.md (audit trail)
+├── benchmark/run_benchmarks.jl # timing/allocation suite for the physics kernels
+├── docs/                       # Documenter.jl site (index, tutorial, switches, API)
+├── examples/run_greb.jl        # plain-Julia driver (no Pluto) — start here
+├── notebooks/
+│   ├── GREB_julia.jl           # interactive Pluto notebook (own Project.toml)
+│   ├── PultoUI.jl              # work-in-progress UI experiments — not wired up
+│   └── launch_pluto.jl         # convenience launcher
+├── tools/
+│   ├── convert_greb_to_jld2.jl  # raw .bin -> JLD2 converter (maintainers only)
+│   └── package_dataset.jl       # build the published dataset archive + SHA256
+├── DATA_README.md              # raw .bin input inventory (maintainers only)
+├── CHANGELOG.md                # user-facing changelog
+└── .claude/skills/             # agent task playbooks (benchmarking, docs checks)
+```
+
+Not committed, but expected at runtime or used by maintainers (all gitignored):
+
+```
+greb_input_data/                # the .jld2 dataset the model reads (~439 MB, auto-downloaded)
+Data/                           # raw GREB .bin inputs, only to regenerate the above (~581 MB)
+.claude/notes/                  # maintainers' working notes
 ```
 
 ## 🔬 Key Model Components
@@ -300,8 +424,8 @@ Contributions to fix these issues are welcome! Open a pull request or an issue o
 
 - **NetCDF output** - optional direct‑write of monthly means 
 - **Visualisation dashboard** - embedded interactive maps and time series (similar to the [interactive database](https://mscm.dkrz.de/GREB_model.html?locale=EN) )
-- **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREB-julia/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
-- **Package registration** - formally register GREB.jl with the Julia General Registry for easy installation
+- **Physics guide** - the [Documenter.jl site](https://EnvDroneSense.github.io/GREBClimate.jl/) now covers the API and a runnable tutorial; a deeper physics-derivation guide is still open
+- **Package registration** - formally register GREBClimate.jl with the Julia General Registry for easy installation
 
 ---
 ## 📚 References

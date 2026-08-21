@@ -1,6 +1,6 @@
 # =============================================================================
 # run_greb.jl — plain-Julia driver reproducing the GREB_julia.jl notebook flow
-# on top of the extracted `GREB` package (no Pluto / no @bind widgets).
+# on top of the extracted `GREBClimate` package (no Pluto / no @bind widgets).
 #
 # Mirrors the notebook's non-interactive path:
 #   1. load JLD2 input data        (notebook data-loading cell)
@@ -10,15 +10,15 @@
 #   5. plot global-mean Ts          (the notebook's plotting cell)
 #
 # Two ways to run:
-#   * as a script:  julia --project=. examples/run_greb.jl [path/to/greb_dataset_jld2]
-#   * from a REPL:   include("examples/run_greb.jl"); run_greb("path/to/greb_dataset_jld2")
+#   * as a script:  julia --project=. examples/run_greb.jl [path/to/greb_input_data]
+#   * from a REPL:   include("examples/run_greb.jl"); run_greb("path/to/greb_input_data")
 #
 # NOTE: the JLD2 input data is large and not committed (see DATA_README.md);
 # supply its directory as the argument or via the GREB_DATA env var. This script
 # never calls `exit()`, so `include`-ing it from a REPL will not kill the session.
 # =============================================================================
 
-using GREB
+using GREBClimate
 using Statistics
 
 """
@@ -87,9 +87,10 @@ function run_greb(jld2_dir::AbstractString;
     return result
 end
 
-# Default data directory: first CLI arg, else $GREB_DATA, else repo-root dataset.
-const DEFAULT_JLD2_DIR = get(ENV, "GREB_DATA",
-    !isempty(ARGS) ? ARGS[1] : joinpath(@__DIR__, "..", "greb_dataset_jld2"))
+# Default data directory. `greb_data_dir` resolves an explicit path, then
+# $GREB_DATA, then a local greb_input_data/, and only then falls back to
+# downloading the dataset via DataDeps (prompting first).
+const DEFAULT_JLD2_DIR = greb_data_dir(isempty(ARGS) ? nothing : ARGS[1])
 
 # Run automatically when executed as a script (`julia run_greb.jl`), but NOT when
 # `include`-d into an interactive session — so a REPL is never terminated.

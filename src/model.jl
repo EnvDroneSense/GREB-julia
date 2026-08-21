@@ -238,22 +238,34 @@ const _CO2_SCENARIO_SYMBOLS = (:rcp26, :rcp45, :rcp60, :ssp119, :ssp126, :ssp245
 const _CO2_SCENARIO_KEY = Dict(:historical_co2 => :hist, :rcp60 => :rcp6)
 
 """
-    greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields())
+    greb_model!(run::RunSpec, cfg::PhysicsConfig; jld2_dir="", fields=ClimateFields(),
+                allow_uninitialized=false)
 
 Run a GREB flux-correction spin-up (`run.flux` years), control run
 (`run.ctrl` years), and scenario run (`run.scnr` years) for `cfg`.
 
 `fields` holds the loaded climatology/grid/flux-correction state (see
-[`ClimateFields`](@ref), built by [`load_greb_jld2!`](@ref)); it defaults to
-a fresh all-zero instance so callers that never load real data (tests,
-quick structural runs) don't need to pass anything. Pass the same `fields`
-instance across multiple calls to reuse already-loaded climatology instead
-of reloading it - that's the only case where `co2_part`/`sw_solar`
+[`ClimateFields`](@ref), built by [`load_greb_jld2!`](@ref)). Pass the same
+`fields` instance across multiple calls to reuse already-loaded climatology
+instead of reloading it - that's the only case where `co2_part`/`sw_solar`
 mutations from one run could otherwise leak into the next; this function
 resets/restores them per-run regardless.
 """
 function greb_model!(run::RunSpec, cfg::PhysicsConfig;
-    jld2_dir::AbstractString="", fields::ClimateFields=ClimateFields())
+    jld2_dir::AbstractString="", fields::ClimateFields=ClimateFields(),
+    allow_uninitialized::Bool=false)
+    if !fields.loaded && !allow_uninitialized
+        error("""
+              greb_model! was given an uninitialized ClimateFields (all-zero climatology).
+              
+              Load the data and pass it through:
+                  fields = load_greb_jld2!(jld2_dir; dataset=:ncep)
+                  greb_model!(run, cfg; jld2_dir=jld2_dir, fields=fields)
+
+              If a data-free run is intended (precompilation, config/scenario-plumbing
+              tests), opt in explicitly with `allow_uninitialized=true`.
+              """)
+    end
     time_flux, time_ctrl, time_scnr = run.flux, run.ctrl, run.scnr
     sw_solar_backup = copy(fields.sw_solar)
     try
